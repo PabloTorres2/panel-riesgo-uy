@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 import pandas as pd
+import numpy as np
 import folium
 import plotly.express as px
 import time
@@ -9,11 +10,9 @@ import time
 # ==========================================
 # 1. CONFIGURACIÓN DEL SISTEMA Y TELEMETRÍA
 # ==========================================
-# Esto TIENE que ser lo primero en ejecutarse
-st.set_page_config(page_title="Radar de Riesgo Uy", page_icon="🚨", layout="wide")
+st.set_page_config(page_title="Centro de Operaciones Uy", page_icon="🚨", layout="wide")
 
-# Google Analytics (Recuerda cambiar el G-XXXXXXXXXX por tu ID real)
-GA_ID = "G-XXXXXXXXXX"
+GA_ID = "G-XXXXXXXXXX" # Recuerda poner tu ID real de Analytics aquí
 ga_script = f"""
 <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
 <script>
@@ -26,138 +25,185 @@ ga_script = f"""
 components.html(ga_script, height=0, width=0)
 
 # ==========================================
-# 2. MOTOR DE DATOS E INTELIGENCIA
+# 2. DICCIONARIOS TÁCTICOS
 # ==========================================
 monitoreo_hidrico = {
     "Artigas_Capital": {"Ciudad": "Artigas", "Afluente": "Río Cuareim", "lat": -30.40, "lon": -56.46, "coef_v": 1.0},
-    "Artigas_BellaUnion": {"Ciudad": "Bella Unión", "Afluente": "Río Uruguay / Cuareim", "lat": -30.26, "lon": -57.60, "coef_v": 0.9},
     "Salto_Capital": {"Ciudad": "Salto", "Afluente": "Río Uruguay", "lat": -31.38, "lon": -57.96, "coef_v": 1.0},
     "Paysandu_Capital": {"Ciudad": "Paysandú", "Afluente": "Río Uruguay", "lat": -32.31, "lon": -58.07, "coef_v": 1.0},
     "RioNegro_FrayBentos": {"Ciudad": "Fray Bentos", "Afluente": "Río Uruguay", "lat": -33.13, "lon": -58.29, "coef_v": 0.8},
-    "RioNegro_NuevoBerlin": {"Ciudad": "Nuevo Berlín", "Afluente": "Río Uruguay", "lat": -32.98, "lon": -58.04, "coef_v": 0.8},
     "Soriano_Mercedes": {"Ciudad": "Mercedes", "Afluente": "Río Negro", "lat": -33.25, "lon": -58.02, "coef_v": 0.9},
     "Soriano_Dolores": {"Ciudad": "Dolores", "Afluente": "Río San Salvador", "lat": -33.53, "lon": -58.21, "coef_v": 0.9},
-    "Soriano_VillaSoriano": {"Ciudad": "Villa Soriano", "Afluente": "Río Negro", "lat": -33.40, "lon": -58.31, "coef_v": 0.8},
     "Durazno_Capital": {"Ciudad": "Durazno", "Afluente": "Río Yí", "lat": -33.38, "lon": -56.52, "coef_v": 1.0},
     "Durazno_SarandiDelYi": {"Ciudad": "Sarandí del Yí", "Afluente": "Río Yí", "lat": -33.34, "lon": -55.62, "coef_v": 0.9},
     "Tacuarembo_PasoDeLosToros": {"Ciudad": "Paso de los Toros", "Afluente": "Río Negro", "lat": -32.81, "lon": -56.51, "coef_v": 0.7},
-    "Tacuarembo_Capital": {"Ciudad": "Tacuarembó", "Afluente": "Río Tacuarembó", "lat": -31.71, "lon": -55.98, "coef_v": 0.8},
-    "Rivera_Capital": {"Ciudad": "Rivera", "Afluente": "Arroyo Cuñapirú", "lat": -30.90, "lon": -55.53, "coef_v": 0.7},
     "Florida_Capital": {"Ciudad": "Florida", "Afluente": "Río Santa Lucía Chico", "lat": -34.09, "lon": -56.21, "coef_v": 0.9},
     "Florida_25DeAgosto": {"Ciudad": "25 de Agosto", "Afluente": "Río Santa Lucía", "lat": -34.40, "lon": -56.39, "coef_v": 1.0},
     "Canelones_SantaLucia": {"Ciudad": "Santa Lucía", "Afluente": "Río Santa Lucía", "lat": -34.45, "lon": -56.39, "coef_v": 1.0},
     "Canelones_SanRamon": {"Ciudad": "San Ramón", "Afluente": "Río Santa Lucía", "lat": -34.30, "lon": -55.96, "coef_v": 0.9},
     "SanJose_Capital": {"Ciudad": "San José de Mayo", "Afluente": "Río San José", "lat": -34.33, "lon": -56.71, "coef_v": 0.9},
-    "SanJose_CiudadDelPlata": {"Ciudad": "Ciudad del Plata", "Afluente": "Río de la Plata / Santa Lucía", "lat": -34.76, "lon": -56.38, "coef_v": 0.8},
-    "Colonia_Rosario": {"Ciudad": "Rosario", "Afluente": "Arroyo Colla", "lat": -34.31, "lon": -57.35, "coef_v": 0.8},
-    "Colonia_Carmelo": {"Ciudad": "Carmelo", "Afluente": "Arroyo de las Vacas", "lat": -33.99, "lon": -58.28, "coef_v": 0.8},
     "TreintaYTres_Capital": {"Ciudad": "Treinta y Tres", "Afluente": "Río Olimar", "lat": -33.23, "lon": -54.38, "coef_v": 1.0},
-    "TreintaYTres_Charqueada": {"Ciudad": "Gral. Enrique Martínez", "Afluente": "Río Cebollatí", "lat": -33.20, "lon": -53.80, "coef_v": 1.0},
-    "TreintaYTres_Vergara": {"Ciudad": "Vergara", "Afluente": "Arroyo Parao", "lat": -32.93, "lon": -53.89, "coef_v": 0.9},
     "CerroLargo_Melo": {"Ciudad": "Melo", "Afluente": "Arroyo Conventos", "lat": -32.36, "lon": -54.16, "coef_v": 0.8},
     "CerroLargo_RioBranco": {"Ciudad": "Río Branco", "Afluente": "Río Yaguarón", "lat": -32.59, "lon": -53.39, "coef_v": 0.9},
     "Rocha_Capital": {"Ciudad": "Rocha", "Afluente": "Arroyo Rocha", "lat": -34.48, "lon": -54.33, "coef_v": 0.8},
-    "Rocha_Cebollati": {"Ciudad": "Cebollatí", "Afluente": "Río Cebollatí", "lat": -33.25, "lon": -53.64, "coef_v": 0.9},
     "Maldonado_SanCarlos": {"Ciudad": "San Carlos", "Afluente": "Arroyo San Carlos", "lat": -34.80, "lon": -54.92, "coef_v": 0.8},
     "Lavalleja_Minas": {"Ciudad": "Minas", "Afluente": "Arroyo San Francisco", "lat": -34.37, "lon": -55.23, "coef_v": 0.7}
 }
 
-# st.cache_data evita que Streamlit vuelva a descargar los datos cada vez que alguien entra a la web
-@st.cache_data(ttl=3600) 
-def obtener_datos_riesgo():
-    def calcular_riesgo_inundacion(lat, lon, coef_v):
-        url = "https://api.open-meteo.com/v1/forecast"
-        parametros = {
-            "latitude": lat, "longitude": lon, 
-            "past_days": 14, "forecast_days": 3,
-            "daily": ["precipitation_sum"],
-            "timezone": "America/Montevideo"
-        }
-        try:
-            respuesta = requests.get(url, params=parametros)
-            df_clima = pd.DataFrame(respuesta.json()["daily"])
-            df_clima['precipitation_sum'] = df_clima['precipitation_sum'].fillna(0)
-            
-            lluvia_pasada = df_clima['precipitation_sum'].iloc[:-3].sum()
-            lluvia_futura = df_clima['precipitation_sum'].iloc[-3:].sum()
-            
-            riesgo_base = (lluvia_pasada * 0.3) + (lluvia_futura * 0.7)
-            indice_inundacion = riesgo_base * coef_v
-            
-            if indice_inundacion < 15: cat = "Normal"
-            elif indice_inundacion <= 35: cat = "Alerta Amarilla"
-            elif indice_inundacion <= 70: cat = "Alerta Naranja"
-            else: cat = "Alerta Roja"
-            
-            return round(lluvia_pasada, 1), round(lluvia_futura, 1), round(indice_inundacion, 2), cat
-        except:
-            return 0, 0, 0, "Error"
+monitoreo_fuego = {
+    "Artigas": {"lat": -30.40, "lon": -56.46, "coef_a": 0.7},
+    "Canelones": {"lat": -34.52, "lon": -55.93, "coef_a": 0.5},
+    "Melo": {"lat": -32.36, "lon": -54.16, "coef_a": 0.7},
+    "Colonia": {"lat": -34.46, "lon": -57.83, "coef_a": 0.5},
+    "Durazno": {"lat": -33.38, "lon": -56.52, "coef_a": 0.6},
+    "Trinidad": {"lat": -33.51, "lon": -56.89, "coef_a": 0.6},
+    "Florida": {"lat": -34.09, "lon": -56.21, "coef_a": 0.6},
+    "Minas": {"lat": -34.37, "lon": -55.23, "coef_a": 0.9},
+    "Maldonado": {"lat": -34.90, "lon": -54.95, "coef_a": 0.4},
+    "Piriápolis": {"lat": -34.86, "lon": -55.27, "coef_a": 0.9},
+    "Montevideo": {"lat": -34.90, "lon": -56.16, "coef_a": 0.2},
+    "Paysandú": {"lat": -32.31, "lon": -58.07, "coef_a": 0.5},
+    "Fray Bentos": {"lat": -33.13, "lon": -58.29, "coef_a": 0.6},
+    "Rivera": {"lat": -30.90, "lon": -55.53, "coef_a": 0.7},
+    "Tranqueras": {"lat": -31.20, "lon": -55.75, "coef_a": 1.0},
+    "Rocha": {"lat": -34.48, "lon": -54.33, "coef_a": 0.7},
+    "Punta del Diablo": {"lat": -34.04, "lon": -53.54, "coef_a": 1.0},
+    "Salto": {"lat": -31.38, "lon": -57.96, "coef_a": 0.5},
+    "San José": {"lat": -34.33, "lon": -56.71, "coef_a": 0.5},
+    "Mercedes": {"lat": -33.25, "lon": -58.02, "coef_a": 0.5},
+    "Tacuarembó": {"lat": -31.71, "lon": -55.98, "coef_a": 0.8},
+    "Treinta y Tres": {"lat": -33.23, "lon": -54.38, "coef_a": 0.7}
+}
 
+# ==========================================
+# 3. MOTORES DE CÁLCULO (CACHÉ ACTIVADO)
+# ==========================================
+@st.cache_data(ttl=3600)
+def obtener_datos_inundacion():
     resultados = []
     for key, info in monitoreo_hidrico.items():
-        pasada, futura, indice, categoria = calcular_riesgo_inundacion(info["lat"], info["lon"], info["coef_v"])
-        resultados.append({
-            "Ciudad": info["Ciudad"],
-            "Afluente": info["Afluente"],
-            "Latitud": info["lat"],
-            "Longitud": info["lon"],
-            "Lluvia_Acumulada_14d": pasada,
-            "Pronóstico_3d": futura,
-            "Índice_Inundación": indice,
-            "Categoría": categoria
-        })
-        time.sleep(0.5)
+        try:
+            url = "https://api.open-meteo.com/v1/forecast"
+            params = {"latitude": info["lat"], "longitude": info["lon"], "past_days": 14, "forecast_days": 3, "daily": ["precipitation_sum"], "timezone": "America/Montevideo"}
+            resp = requests.get(url, params=params, timeout=4)
+            if resp.status_code != 200: raise ValueError
+            
+            df_c = pd.DataFrame(resp.json().get("daily", {}))
+            df_c['precipitation_sum'] = df_c['precipitation_sum'].fillna(0)
+            ll_pasada = df_c['precipitation_sum'].iloc[:-3].sum()
+            ll_futura = df_c['precipitation_sum'].iloc[-3:].sum()
+            
+            riesgo = (ll_pasada * 0.3) + (ll_futura * 0.7)
+            idx = riesgo * info["coef_v"]
+            
+            if idx < 15: cat = "Normal"
+            elif idx <= 35: cat = "Alerta Amarilla"
+            elif idx <= 70: cat = "Alerta Naranja"
+            else: cat = "Alerta Roja"
+            
+            resultados.append({"Ciudad": info["Ciudad"], "Afluente": info["Afluente"], "Latitud": info["lat"], "Longitud": info["lon"], "Lluvia_14d": round(ll_pasada,1), "Pronostico_3d": round(ll_futura,1), "Indice": round(idx,2), "Categoria": cat})
+        except:
+            resultados.append({"Ciudad": info["Ciudad"], "Afluente": info["Afluente"], "Latitud": info["lat"], "Longitud": info["lon"], "Lluvia_14d": 0, "Pronostico_3d": 0, "Indice": 0, "Categoria": "Sin Datos"})
+        time.sleep(0.2)
+    return pd.DataFrame(resultados)
+
+@st.cache_data(ttl=3600)
+def obtener_datos_fuego():
+    resultados = []
+    for ciudad, info in monitoreo_fuego.items():
+        try:
+            url = "https://api.open-meteo.com/v1/forecast"
+            params = {"latitude": info["lat"], "longitude": info["lon"], "past_days": 90, "forecast_days": 1, "daily": ["temperature_2m_max", "relative_humidity_2m_min", "precipitation_sum"], "timezone": "America/Montevideo"}
+            resp = requests.get(url, params=params, timeout=4)
+            if resp.status_code != 200: raise ValueError
+            
+            df_c = pd.DataFrame(resp.json().get("daily", {}))
+            df_c['precipitation_sum'] = df_c['precipitation_sum'].fillna(0)
+            df_c['temperature_2m_max'] = df_c['temperature_2m_max'].ffill().bfill()
+            df_c['relative_humidity_2m_min'] = df_c['relative_humidity_2m_min'].ffill().bfill()
+            df_c = df_c.sort_values(by='time', ascending=False).reset_index(drop=True)
+            
+            prec = df_c['precipitation_sum'].values
+            p = [np.sum(prec[0:i]) for i in [1, 2, 3, 4, 5, 10, 15, 30, 60, 90]]
+            exps = [-0.14, -0.07, -0.04, -0.03, -0.02, -0.01, -0.008, -0.004, -0.002, -0.001]
+            fps = [np.exp(exps[0] * p[0])]
+            for i in range(1, 10): fps.append(np.exp(exps[i] * (p[i] - p[i-1])))
+            
+            PSE = 105 * np.prod(fps)
+            RB = 0.9 * (1 + np.sin(np.radians((info["coef_a"] * 1.72 * PSE - 90)))) / 2
+            Factor_HR = -0.006 * df_c['relative_humidity_2m_min'].iloc[0] + 1.3
+            Factor_T = 0.02 * df_c['temperature_2m_max'].iloc[0] + 0.4
+            RFO = RB * Factor_HR * Factor_T
+            
+            if RFO < 0.15: cat = "Mínimo"
+            elif RFO <= 0.40: cat = "Bajo"
+            elif RFO <= 0.70: cat = "Medio"
+            elif RFO <= 0.95: cat = "Alto"
+            else: cat = "Crítico"
+            
+            resultados.append({"Ciudad": ciudad, "Latitud": info["lat"], "Longitud": info["lon"], "PSE": round(PSE,2), "RFO": round(RFO,4), "Categoria": cat})
+        except:
+            resultados.append({"Ciudad": ciudad, "Latitud": info["lat"], "Longitud": info["lon"], "PSE": 0, "RFO": 0, "Categoria": "Sin Datos"})
+        time.sleep(0.2)
     return pd.DataFrame(resultados)
 
 # ==========================================
-# 3. INTERFAZ GRÁFICA (DASHBOARD)
+# 4. INTERFAZ GRÁFICA (TABS)
 # ==========================================
-st.title("🚨 Panel de Monitoreo de Riesgos - Uruguay")
-st.markdown("Sistema de alerta temprana basado en saturación de cuencas y modelos meteorológicos.")
+st.title("🚨 Centro de Operaciones y Alerta Temprana")
+st.markdown("Plataforma consolidada de inteligencia para evaluación de riesgos a nivel nacional.")
 
-# Cargamos los datos con un spinner visual para que el usuario sepa que está cargando
-with st.spinner('Actualizando telemetría hidrológica nacional...'):
-    df_hidrico = obtener_datos_riesgo()
+# Ejecución de los motores de datos
+with st.spinner('Sincronizando satélites meteorológicos (máx 30 seg)...'):
+    df_inundacion = obtener_datos_inundacion()
+    df_fuego = obtener_datos_fuego()
 
-# --- Gráfico de Dispersión ---
-st.subheader("📊 Análisis de Cuencas")
-fig_scatter = px.scatter(
-    df_hidrico, 
-    x="Lluvia_Acumulada_14d", 
-    y="Pronóstico_3d", 
-    color="Categoría", 
-    hover_name="Ciudad", 
-    hover_data=["Afluente", "Índice_Inundación"], 
-    color_discrete_map={
-        "Normal": "green", 
-        "Alerta Amarilla": "gold", 
-        "Alerta Naranja": "darkorange", 
-        "Alerta Roja": "darkred"
-    },
-    height=450
-)
-st.plotly_chart(fig_scatter, use_container_width=True)
+# Creación de Pestañas
+tab_agua, tab_fuego = st.tabs(["🌊 VECTOR HÍDRICO (Inundaciones)", "🔥 VECTOR FORESTAL (Incendios)"])
 
-# --- Mapa Táctico ---
-st.subheader("🗺️ Despliegue Geográfico")
-mapa_inundaciones = folium.Map(location=[-32.5, -56.0], zoom_start=6)
-colores_mapa = {"Normal": "green", "Alerta Amarilla": "orange", "Alerta Naranja": "red", "Alerta Roja": "darkred"}
-
-for index, fila in df_hidrico.iterrows():
-    folium.CircleMarker(
-        location=[fila['Latitud'], fila['Longitud']],
-        radius=10,
-        tooltip=f"<b>{fila['Ciudad']}</b><br>Río: {fila['Afluente']}<br>Índice: {fila['Índice_Inundación']}<br>Estado: <b>{fila['Categoría']}</b>",
-        color=colores_mapa.get(fila['Categoría'], "gray"),
-        fill=True,
-        fill_opacity=0.7
-    ).add_to(mapa_inundaciones)
+# --- PESTAÑA 1: INUNDACIONES ---
+with tab_agua:
+    if "Sin Datos" in df_inundacion["Categoria"].values: st.warning("⚠️ Error de conexión parcial en vector hídrico.")
     
-    folium.Marker(
-        location=[fila['Latitud'], fila['Longitud']],
-        icon=folium.DivIcon(
-            html=f'<div style="font-size: 11pt; font-weight: bold; color: black; text-shadow: 1px 1px 3px white; margin-left: 15px; margin-top: -10px;">{fila["Índice_Inundación"]}</div>'
-        )
-    ).add_to(mapa_inundaciones)
+    col1, col2 = st.columns([1, 2]) # Layout para pantallas grandes
+    with col1:
+        st.subheader("Análisis de Cuencas")
+        fig_agua = px.scatter(df_inundacion, x="Lluvia_14d", y="Pronostico_3d", color="Categoria", hover_name="Ciudad", hover_data=["Afluente", "Indice"],
+            color_discrete_map={"Normal": "green", "Alerta Amarilla": "gold", "Alerta Naranja": "darkorange", "Alerta Roja": "darkred", "Sin Datos": "gray"}, height=400)
+        st.plotly_chart(fig_agua, use_container_width=True)
+    
+    with col2:
+        st.subheader("Mapa Táctico Hídrico")
+        mapa_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6)
+        colores_agua = {"Normal": "green", "Alerta Amarilla": "orange", "Alerta Naranja": "red", "Alerta Roja": "darkred", "Sin Datos": "gray"}
+        
+        for idx, fila in df_inundacion.iterrows():
+            folium.CircleMarker(location=[fila['Latitud'], fila['Longitud']], radius=10,
+                tooltip=f"<b>{fila['Ciudad']}</b><br>Río: {fila['Afluente']}<br>Índice: {fila['Indice']}<br>Estado: <b>{fila['Categoria']}</b>",
+                color=colores_agua.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7).add_to(mapa_agua)
+            folium.Marker(location=[fila['Latitud'], fila['Longitud']],
+                icon=folium.DivIcon(html=f'<div style="font-size: 11pt; font-weight: bold; color: black; text-shadow: 1px 1px 3px white; margin-left: 15px; margin-top: -10px;">{fila["Indice"]}</div>')
+            ).add_to(mapa_agua)
+        components.html(mapa_agua._repr_html_(), height=500)
 
-components.html(mapa_inundaciones._repr_html_(), height=650)
+# --- PESTAÑA 2: INCENDIOS ---
+with tab_fuego:
+    if "Sin Datos" in df_fuego["Categoria"].values: st.warning("⚠️ Error de conexión parcial en vector forestal.")
+    
+    col3, col4 = st.columns([1, 2])
+    with col3:
+        st.subheader("Dispersión de Riesgo")
+        fig_fuego = px.scatter(df_fuego, x="PSE", y="RFO", color="Categoria", hover_name="Ciudad",
+            color_discrete_map={"Mínimo": "green", "Bajo": "blue", "Medio": "gold", "Alto": "darkorange", "Crítico": "darkred", "Sin Datos": "gray"}, height=400)
+        st.plotly_chart(fig_fuego, use_container_width=True)
+    
+    with col4:
+        st.subheader("Mapa Táctico Forestal")
+        mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6)
+        colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
+        
+        for idx, fila in df_fuego.iterrows():
+            folium.CircleMarker(location=[fila['Latitud'], fila['Longitud']], radius=9,
+                tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Estado: <b>{fila['Categoria']}</b>",
+                color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7).add_to(mapa_fuego)
+        components.html(mapa_fuego._repr_html_(), height=500)
