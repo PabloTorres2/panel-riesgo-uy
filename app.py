@@ -105,11 +105,19 @@ df_hidrico.to_csv(nombre_archivo, index=False, encoding='utf-8-sig')
 
 print(f"\n¡Análisis completado! Archivo '{nombre_archivo}' guardado.")
 print(df_hidrico[['Ciudad', 'Afluente', 'Índice_Inundación', 'Categoría']].head(15))
+
+import folium
+
 import plotly.express as px
 import folium
-import IPython
+import streamlit as st
+import streamlit.components.v1 as components
 
-# --- 1. GRÁFICO DE DISPERSIÓN (PLOTLY) ---
+# --- 1. TÍTULO DEL PANEL EN LA WEB ---
+st.title("🚨 Radar de Riesgo Hídrico - Uruguay")
+st.markdown("Monitor de saturación de suelo y pronóstico de lluvias a 3 días.")
+
+# --- 2. GRÁFICO DE DISPERSIÓN EN STREAMLIT ---
 fig_scatter = px.scatter(
     df_hidrico, 
     x="Lluvia_Acumulada_14d", 
@@ -117,7 +125,7 @@ fig_scatter = px.scatter(
     color="Categoría", 
     hover_name="Ciudad", 
     hover_data=["Afluente", "Índice_Inundación"], 
-    title="Análisis Hidrológico: Saturación del Suelo vs Pronóstico de Lluvias",
+    title="Análisis Táctico: Saturación vs Lluvia Inminente",
     color_discrete_map={
         "Normal": "green", 
         "Alerta Amarilla": "gold", 
@@ -127,34 +135,45 @@ fig_scatter = px.scatter(
     height=500
 )
 
-fig_scatter.show()
+# Comando nativo de Streamlit para dibujar gráficos
+st.plotly_chart(fig_scatter, use_container_width=True)
 
-# --- 2. MAPA INTERACTIVO (FOLIUM) ---
+# --- 3. MAPA INTERACTIVO DE INUNDACIONES ---
+st.subheader("🗺️ Despliegue Geográfico de Alertas")
+
+# Creamos el lienzo del mapa
 mapa_inundaciones = folium.Map(location=[-32.5, -56.0], zoom_start=6)
 
 colores_mapa = {
     "Normal": "green", 
-    "Alerta Amarilla": "orange", # Ajuste visual para el mapa
-    "Alerta Naranja": "darkred", 
-    "Alerta Roja": "purple"
+    "Alerta Amarilla": "orange", 
+    "Alerta Naranja": "red", 
+    "Alerta Roja": "darkred"
 }
 
+# Pegamos los puntos encima con el bucle
 for index, fila in df_hidrico.iterrows():
+    # El círculo de color interactivo
     folium.CircleMarker(
         location=[fila['Latitud'], fila['Longitud']],
-        radius=9,
-        popup=f"<b>{fila['Ciudad']}</b><br>Río/Arroyo: {fila['Afluente']}<br>Índice: {fila['Índice_Inundación']}<br>Alerta: {fila['Categoría']}",
+        radius=10,
+        tooltip=f"<b>{fila['Ciudad']}</b><br>Río: {fila['Afluente']}<br>Índice: {fila['Índice_Inundación']}<br>Estado: <b>{fila['Categoría']}</b>",
         color=colores_mapa.get(fila['Categoría'], "gray"),
         fill=True,
-        fill_opacity=0.8
+        fill_opacity=0.7
+    ).add_to(mapa_inundaciones)
+    
+    # El número permanente flotando en el mapa
+    folium.Marker(
+        location=[fila['Latitud'], fila['Longitud']],
+        icon=folium.DivIcon(
+            html=f'<div style="font-size: 11pt; font-weight: bold; color: black; text-shadow: 1px 1px 3px white; margin-left: 15px; margin-top: -10px;">{fila["Índice_Inundación"]}</div>'
+        )
     ).add_to(mapa_inundaciones)
 
-# --- FORZAR VISUALIZACIÓN EN COLAB ---
-# Guardamos y mostramos el mapa como HTML para evadir el bloqueo de Colab
-mapa_inundaciones.save("mapa_hidrico.html")
-IPython.display.HTML(filename="mapa_hidrico.html")
-import folium
-import IPython
+# --- 4. DIBUJAR MAPA EN LA WEB ---
+# Le ordenamos a Streamlit que muestre el mapa terminado
+components.html(mapa_inundaciones._repr_html_(), height=650)
 
 # --- CREACIÓN DEL MAPA DE INUNDACIONES ---
 # Centramos el mapa en Uruguay
