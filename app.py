@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import folium
-from folium.plugins import HeatMap  # <-- Nueva herramienta de Inteligencia
+from folium.plugins import HeatMap
 import plotly.express as px
 import concurrent.futures
 import time
@@ -97,20 +97,8 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN Y CÁLCULO
+# 4. MOTORES DE EXTRACCIÓN METEOROLÓGICA
 # ==========================================
-def obtener_capa_radar():
-    try:
-        res = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            latest_time = data["radar"]["past"][-1]["time"]
-            host = data["host"]
-            return f"{host}/v2/radar/{latest_time}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
-        return None
-    except:
-        return None
-
 def fetch_hidrico(info):
     try:
         time.sleep(random.uniform(0.1, 0.7)) 
@@ -179,7 +167,7 @@ def fetch_fuego(ciudad, info):
         df_c = df_c.sort_values(by='time', ascending=False).reset_index(drop=True)
         prec = df_c['precipitation_sum'].fillna(0).values
         
-        precip_total_90d = np.sum(prec) # Extraemos lluvia total para el mapa de sequía
+        precip_total_90d = np.sum(prec)
         p = [np.sum(prec[0:i]) for i in [1, 2, 3, 4, 5, 10, 15, 30, 60, 90]]
         
         exps = [-0.14, -0.07, -0.04, -0.03, -0.02, -0.01, -0.008, -0.004, -0.002, -0.001]
@@ -237,12 +225,8 @@ def obtener_datos_completos():
 # ==========================================
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
-with st.spinner('Sincronizando modelos de satélite...'):
+with st.spinner('Sincronizando modelos de Open-Meteo...'):
     df_inundacion, df_fuego = obtener_datos_completos()
-    enlace_radar = obtener_capa_radar()
-
-if not enlace_radar:
-    st.info("🛰️ Enlace con radar de precipitaciones temporalmente congestionado.")
 
 tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
 
@@ -252,7 +236,6 @@ with tab_agua:
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
     
     st.markdown("#### Análisis de Cuencas Global")
-    # Gráfico ahora ocupa el ancho completo para mejor legibilidad
     fig_agua = px.scatter(
         df_inundacion, 
         x="Lluvia_14d", 
@@ -272,7 +255,6 @@ with tab_agua:
     )
     st.plotly_chart(fig_agua, use_container_width=True)
     
-    # Separamos en dos mapas
     col1, col2 = st.columns(2)
     
     with col1:
@@ -295,11 +277,21 @@ with tab_agua:
         components.html(mapa_indice_agua._repr_html_(), height=450)
         
     with col2:
-        st.markdown("#### Mapa Meteorológico Satelital")
+        st.markdown("#### Mapa Satelital Infrarrojo (GOES-16)")
         mapa_meteo = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
-        if enlace_radar:
-            folium.TileLayer(tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias", overlay=True, control=True, opacity=0.7).add_to(mapa_meteo)
+        # INYECCIÓN DEL SATÉLITE GOES-16 (IEM WMS)
+        folium.WmsTileLayer(
+            url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
+            layers="goes_conus_ir",
+            name="Satélite GOES-16 (IR)",
+            attr="Iowa Environmental Mesonet (IEM)",
+            format="image/png",
+            transparent=True,
+            overlay=True,
+            control=True,
+            opacity=0.5
+        ).add_to(mapa_meteo)
             
         for idx, fila in df_inundacion.iterrows():
             folium.CircleMarker(
@@ -340,9 +332,22 @@ with tab_fuego:
     col3, col4 = st.columns(2)
     
     with col3:
-        st.markdown("#### Mapa de Índice (RFO)")
-        mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
+        st.markdown("#### Mapa de Índice (RFO) y Satélite GOES-16")
+        mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
+        
+        # INYECCIÓN DEL SATÉLITE GOES-16 (IEM WMS) también en incendios
+        folium.WmsTileLayer(
+            url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
+            layers="goes_conus_ir",
+            name="Satélite GOES-16 (IR)",
+            attr="Iowa Environmental Mesonet (IEM)",
+            format="image/png",
+            transparent=True,
+            overlay=True,
+            control=True,
+            opacity=0.5
+        ).add_to(mapa_fuego)
         
         for idx, fila in df_fuego.iterrows():
             folium.CircleMarker(
@@ -351,22 +356,19 @@ with tab_fuego:
                 tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Nivel: <b>{fila['Categoria']}</b>",
                 color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7
             ).add_to(mapa_fuego)
+            
+        folium.LayerControl().add_to(mapa_fuego)
         components.html(mapa_fuego._repr_html_(), height=450)
         
     with col4:
         st.markdown("#### Mapa de Calor (Estrés Hídrico/Sequía)")
-        # Fondo oscuro para resaltar el calor
         mapa_calor = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
-        # Matemática para Calor Inverso: (Lluvia máxima registrada - Lluvia de esta ciudad) 
-        # Zonas con menos lluvia = puntaje de calor más alto (Rojo)
         lluvia_maxima = df_fuego['Precip_90d'].max()
-        df_fuego['Peso_Sequia'] = df_fuego['Precip_90d'].apply(lambda x: lluvia_maxima - x + 10) # +10 de base para que zonas llovedoras igual se vean levemente
+        df_fuego['Peso_Sequia'] = df_fuego['Precip_90d'].apply(lambda x: lluvia_maxima - x + 10)
         
-        # Preparamos la matriz de calor para Folium
         heat_data = [[row['Latitud'], row['Longitud'], row['Peso_Sequia']] for idx, row in df_fuego.iterrows()]
         
-        # El gradiente va de azul (menos seco) a rojo intenso (muy seco)
         HeatMap(
             heat_data,
             radius=35,
