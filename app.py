@@ -6,63 +6,36 @@ import numpy as np
 import folium
 import plotly.express as px
 import concurrent.futures
+import time
 
 # ==========================================
-# 1. CONFIGURACIÓN DEL SISTEMA Y ESTILOS (UI)
+# 1. CONFIGURACIÓN DEL SISTEMA
 # ==========================================
-st.set_page_config(page_title="Sistema de Alerta FAU", page_icon="✈️", layout="wide")
+# Comando estricto: Debe ser la línea 1
+st.set_page_config(page_title="Vigilancia Territorial FAU", page_icon="✈️", layout="wide")
 
-# --- Inyección de CSS Institucional (Fuerza Aérea & Ambiental) ---
-css_institucional = """
-<style>
-    /* Estilo general del fondo y texto */
-    .stApp {
-        background-color: #F8FAFC;
-    }
-    
-    /* Personalización de las Pestañas (Tabs) */
-    div[data-baseweb="tab-list"] {
-        gap: 15px;
-        background-color: transparent;
-    }
-    div[data-baseweb="tab"] {
-        height: 55px;
-        background-color: #1B2A47; /* Azul oscuro institucional FAU */
-        color: #FFFFFF !important;
-        border-radius: 8px;
-        padding: 10px 24px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-        border: 1px solid #2C3E50;
-    }
-    div[data-baseweb="tab"]:hover {
-        background-color: #2C3E50;
-        transform: translateY(-2px);
-    }
-    div[aria-selected="true"] {
-        background-color: #047857 !important; /* Verde ambiental activo */
-        border: 2px solid #34D399 !important;
-        box-shadow: 0 0 15px rgba(4, 120, 87, 0.4);
-    }
-    
-    /* Tarjetas de los gráficos */
-    .css-1r6slb0, .css-18e3th9 {
-        background-color: #FFFFFF;
-        border-radius: 10px;
-        padding: 15px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-</style>
-"""
-st.markdown(css_institucional, unsafe_allow_html=True)
-
-# Google Analytics
+# Rastreador de telemetría (Google Analytics)
 GA_ID = "G-XXXXXXXXXX" 
 ga_script = f"""<script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script><script>window.dataLayer = window.dataLayer || []; function gtag(){{dataLayer.push(arguments);}} gtag('js', new Date()); gtag('config', '{GA_ID}');</script>"""
 components.html(ga_script, height=0, width=0)
 
 # ==========================================
-# 2. DICCIONARIOS GEOGRÁFICOS
+# 2. CABECERA INSTITUCIONAL FAU
+# ==========================================
+col_logo, col_titulo = st.columns([1, 7])
+
+with col_logo:
+    # Escarapela oficial de la FAU alojada en servidor seguro (Wikimedia)
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Roundel_of_Uruguay.svg/240px-Roundel_of_Uruguay.svg.png", use_container_width=True)
+
+with col_titulo:
+    st.title("Sistema de Vigilancia Territorial")
+    st.markdown("**FUERZA AÉREA URUGUAYA** | Plataforma integrada de evaluación de riesgos ambientales para el despliegue operativo.")
+
+st.divider()
+
+# ==========================================
+# 3. DICCIONARIOS GEOGRÁFICOS
 # ==========================================
 monitoreo_hidrico = {
     "Artigas_Capital": {"Ciudad": "Artigas", "Afluente": "Río Cuareim", "lat": -30.40, "lon": -56.46, "coef_v": 1.0},
@@ -102,7 +75,7 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 3. MOTORES DE EXTRACCIÓN (HILOS PARALELOS)
+# 4. MOTORES DE EXTRACCIÓN (PARALELOS)
 # ==========================================
 def fetch_hidrico(info):
     try:
@@ -158,42 +131,30 @@ def obtener_datos_completos():
         for f in concurrent.futures.as_completed(f_fuego): r_fuego.append(f.result())
     return pd.DataFrame(r_agua), pd.DataFrame(r_fuego)
 
+
 # ==========================================
-# 4. INTERFAZ PRINCIPAL INSTITUCIONAL
+# 5. PANELES DE CONTROL (TABS FRONT-END)
 # ==========================================
-
-# Cabecera con imagen ilustrativa genérica de operaciones aéreas/ambientales
-# (Puedes reemplazar el link de la imagen por el logo de la FAU u otro gráfico)
-col_img, col_txt = st.columns([1, 4])
-with col_img:
-    st.image("https://images.unsplash.com/photo-1579607590892-0b19b6eb8236?q=80&w=250&auto=format&fit=crop", use_container_width=True)
-with col_txt:
-    st.title("Sistema de Vigilancia Territorial")
-    st.markdown("Plataforma integrada de evaluación de riesgos ambientales para el despliegue de unidades aéreas y terrestres.")
-
-st.divider()
-
-# Extracción de datos
-with st.spinner('Sincronizando modelos meteorológicos globales...'):
+with st.spinner('Estableciendo conexión con satélites meteorológicos...'):
     df_inundacion, df_fuego = obtener_datos_completos()
 
-# Creación de las pestañas estilizadas
-tab_agua, tab_fuego = st.tabs(["💧 MODELO HÍDRICO (Riesgo de Inundación)", "🌲 MODELO FORESTAL (Riesgo de Incendio)"])
+# Pestañas Nativas (Sin CSS forzado)
+tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
 
 # --- PESTAÑA 1: INUNDACIONES ---
 with tab_agua:
-    if "Sin Datos" in df_inundacion["Categoria"].values: st.warning("Aviso de Sistema: Disrupción temporal con enlace satelital en algunas áreas.")
+    if "Sin Datos" in df_inundacion["Categoria"].values: 
+        st.warning("Aviso: Disrupción temporal de telemetría en algunas localidades geográficas.")
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.subheader("Evaluación de Cuencas")
+        st.markdown("#### Análisis de Cuencas")
         fig_agua = px.scatter(df_inundacion, x="Lluvia_14d", y="Pronostico_3d", color="Categoria", hover_name="Ciudad", hover_data=["Afluente", "Indice"],
-            color_discrete_map={"Normal": "#10B981", "Alerta Amarilla": "#FBBF24", "Alerta Naranja": "#F97316", "Alerta Roja": "#DC2626", "Sin Datos": "#94A3B8"}, height=400)
-        fig_agua.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            color_discrete_map={"Normal": "#10B981", "Alerta Amarilla": "#FBBF24", "Alerta Naranja": "#F97316", "Alerta Roja": "#DC2626", "Sin Datos": "#94A3B8"}, height=450, template="plotly_white")
         st.plotly_chart(fig_agua, use_container_width=True)
     
     with col2:
-        st.subheader("Despliegue Geográfico Hídrico")
+        st.markdown("#### Despliegue Geográfico")
         mapa_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
         colores_agua = {"Normal": "green", "Alerta Amarilla": "orange", "Alerta Naranja": "red", "Alerta Roja": "darkred", "Sin Datos": "gray"}
         
@@ -208,18 +169,18 @@ with tab_agua:
 
 # --- PESTAÑA 2: INCENDIOS ---
 with tab_fuego:
-    if "Sin Datos" in df_fuego["Categoria"].values: st.warning("Aviso de Sistema: Disrupción temporal con enlace satelital en algunas áreas.")
+    if "Sin Datos" in df_fuego["Categoria"].values: 
+        st.warning("Aviso: Disrupción temporal de telemetría en algunas localidades geográficas.")
     
     col3, col4 = st.columns([1, 2])
     with col3:
-        st.subheader("Índice de Vulnerabilidad Forestal")
+        st.markdown("#### Índice de Vulnerabilidad (RFO)")
         fig_fuego = px.scatter(df_fuego, x="PSE", y="RFO", color="Categoria", hover_name="Ciudad",
-            color_discrete_map={"Mínimo": "#10B981", "Bajo": "#3B82F6", "Medio": "#FBBF24", "Alto": "#F97316", "Crítico": "#DC2626", "Sin Datos": "#94A3B8"}, height=400)
-        fig_fuego.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            color_discrete_map={"Mínimo": "#10B981", "Bajo": "#3B82F6", "Medio": "#FBBF24", "Alto": "#F97316", "Crítico": "#DC2626", "Sin Datos": "#94A3B8"}, height=450, template="plotly_white")
         st.plotly_chart(fig_fuego, use_container_width=True)
     
     with col4:
-        st.subheader("Cartografía de Riesgo (RFO)")
+        st.markdown("#### Cartografía de Riesgo")
         mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
         colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
         
