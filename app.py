@@ -6,6 +6,8 @@ import numpy as np
 import folium
 import plotly.express as px
 import concurrent.futures
+import time
+import random
 
 # ==========================================
 # 1. CONFIGURACIÓN DEL SISTEMA
@@ -43,7 +45,7 @@ with col_titulo:
 st.divider()
 
 # ==========================================
-# 3. DICCIONARIOS GEOGRÁFICOS (FORMATO SEGURO)
+# 3. DICCIONARIOS GEOGRÁFICOS
 # ==========================================
 monitoreo_hidrico = {
     "Artigas_Cap": {"Ciudad": "Artigas", "Afluente": "Río Cuareim", "lat": -30.40, "lon": -56.46, "coef_v": 1.0},
@@ -94,7 +96,7 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN Y RADARES
+# 4. MOTORES DE EXTRACCIÓN (BLINDADOS)
 # ==========================================
 def obtener_capa_radar():
     try:
@@ -110,6 +112,9 @@ def obtener_capa_radar():
 
 def fetch_hidrico(info):
     try:
+        # Micro-demora para evadir el bloqueo del servidor Open-Meteo
+        time.sleep(random.uniform(0.1, 0.7)) 
+        
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": info["lat"], 
@@ -119,13 +124,18 @@ def fetch_hidrico(info):
             "daily": ["precipitation_sum"], 
             "timezone": "America/Montevideo"
         }
-        resp = requests.get(url, params=params, timeout=4)
+        # Aumentamos el tiempo límite a 10 segundos
+        resp = requests.get(url, params=params, timeout=10)
+        
+        # Si el servidor aún así nos rechaza, abortamos limpiamente
         if resp.status_code != 200: 
             raise ValueError
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         ll_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3].sum()
         ll_futura = df_c['precipitation_sum'].fillna(0).iloc[-3:].sum()
+        
+        # Aplicación estricta del coeficiente matemático
         idx = ((ll_pasada * 0.3) + (ll_futura * 0.7)) * info["coef_v"]
         
         if idx < 15: cat = "Normal"
@@ -157,6 +167,7 @@ def fetch_hidrico(info):
 
 def fetch_fuego(ciudad, info):
     try:
+        time.sleep(random.uniform(0.1, 0.7))
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": info["lat"], 
@@ -166,7 +177,7 @@ def fetch_fuego(ciudad, info):
             "daily": ["temperature_2m_max", "relative_humidity_2m_min", "precipitation_sum"], 
             "timezone": "America/Montevideo"
         }
-        resp = requests.get(url, params=params, timeout=4)
+        resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200: 
             raise ValueError
             
@@ -179,6 +190,7 @@ def fetch_fuego(ciudad, info):
         fps = [np.exp(exps[0] * p[0])] + [np.exp(exps[i] * (p[i] - p[i-1])) for i in range(1, 10)]
         PSE = 105 * np.prod(fps)
         
+        # Aplicación del coeficiente de incendio (coef_a)
         RFO = (0.9 * (1 + np.sin(np.radians((info["coef_a"] * 1.72 * PSE - 90)))) / 2) * \
               (-0.006 * df_c['relative_humidity_2m_min'].ffill().iloc[0] + 1.3) * \
               (0.02 * df_c['temperature_2m_max'].ffill().iloc[0] + 0.4)
@@ -212,12 +224,13 @@ def obtener_datos_completos():
     r_agua = []
     r_fuego = []
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    # Reducimos max_workers a 4 para no ahogar la API
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         f_agua = [executor.submit(fetch_hidrico, i) for k, i in monitoreo_hidrico.items()]
         for f in concurrent.futures.as_completed(f_agua): 
             r_agua.append(f.result())
             
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         f_fuego = [executor.submit(fetch_fuego, c, i) for c, i in monitoreo_fuego.items()]
         for f in concurrent.futures.as_completed(f_fuego): 
             r_fuego.append(f.result())
@@ -240,7 +253,7 @@ tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD
 # --- PESTAÑA 1: INUNDACIONES ---
 with tab_agua:
     if "Sin Datos" in df_inundacion["Categoria"].values: 
-        st.warning("Aviso: Disrupción temporal en algunas localidades.")
+        st.warning("Aviso: Disrupción temporal en algunas localidades. Verifique enlace satelital.")
     
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -320,7 +333,7 @@ with tab_agua:
 # --- PESTAÑA 2: INCENDIOS ---
 with tab_fuego:
     if "Sin Datos" in df_fuego["Categoria"].values: 
-        st.warning("Aviso: Disrupción temporal en algunas localidades.")
+        st.warning("Aviso: Disrupción temporal en algunas localidades. Verifique enlace satelital.")
     
     col3, col4 = st.columns([1, 2])
     with col3:
