@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import folium
+from folium.plugins import HeatMap  # <-- Nueva herramienta de Inteligencia
 import plotly.express as px
 import concurrent.futures
 import time
@@ -96,7 +97,7 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN (BLINDADOS)
+# 4. MOTORES DE EXTRACCIÓN Y CÁLCULO
 # ==========================================
 def obtener_capa_radar():
     try:
@@ -112,9 +113,7 @@ def obtener_capa_radar():
 
 def fetch_hidrico(info):
     try:
-        # Micro-demora para evadir el bloqueo del servidor Open-Meteo
         time.sleep(random.uniform(0.1, 0.7)) 
-        
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": info["lat"], 
@@ -124,18 +123,13 @@ def fetch_hidrico(info):
             "daily": ["precipitation_sum"], 
             "timezone": "America/Montevideo"
         }
-        # Aumentamos el tiempo límite a 10 segundos
         resp = requests.get(url, params=params, timeout=10)
-        
-        # Si el servidor aún así nos rechaza, abortamos limpiamente
         if resp.status_code != 200: 
             raise ValueError
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         ll_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3].sum()
         ll_futura = df_c['precipitation_sum'].fillna(0).iloc[-3:].sum()
-        
-        # Aplicación estricta del coeficiente matemático
         idx = ((ll_pasada * 0.3) + (ll_futura * 0.7)) * info["coef_v"]
         
         if idx < 15: cat = "Normal"
@@ -184,13 +178,14 @@ def fetch_fuego(ciudad, info):
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         df_c = df_c.sort_values(by='time', ascending=False).reset_index(drop=True)
         prec = df_c['precipitation_sum'].fillna(0).values
+        
+        precip_total_90d = np.sum(prec) # Extraemos lluvia total para el mapa de sequía
         p = [np.sum(prec[0:i]) for i in [1, 2, 3, 4, 5, 10, 15, 30, 60, 90]]
         
         exps = [-0.14, -0.07, -0.04, -0.03, -0.02, -0.01, -0.008, -0.004, -0.002, -0.001]
         fps = [np.exp(exps[0] * p[0])] + [np.exp(exps[i] * (p[i] - p[i-1])) for i in range(1, 10)]
         PSE = 105 * np.prod(fps)
         
-        # Aplicación del coeficiente de incendio (coef_a)
         RFO = (0.9 * (1 + np.sin(np.radians((info["coef_a"] * 1.72 * PSE - 90)))) / 2) * \
               (-0.006 * df_c['relative_humidity_2m_min'].ffill().iloc[0] + 1.3) * \
               (0.02 * df_c['temperature_2m_max'].ffill().iloc[0] + 0.4)
@@ -207,6 +202,7 @@ def fetch_fuego(ciudad, info):
             "Longitud": info["lon"], 
             "PSE": round(PSE,2), 
             "RFO": round(RFO,4), 
+            "Precip_90d": round(precip_total_90d, 1),
             "Categoria": cat
         }
     except:
@@ -216,6 +212,7 @@ def fetch_fuego(ciudad, info):
             "Longitud": info["lon"], 
             "PSE": 0, 
             "RFO": 0, 
+            "Precip_90d": 0,
             "Categoria": "Sin Datos"
         }
 
@@ -224,7 +221,6 @@ def obtener_datos_completos():
     r_agua = []
     r_fuego = []
     
-    # Reducimos max_workers a 4 para no ahogar la API
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         f_agua = [executor.submit(fetch_hidrico, i) for k, i in monitoreo_hidrico.items()]
         for f in concurrent.futures.as_completed(f_agua): 
@@ -241,160 +237,141 @@ def obtener_datos_completos():
 # ==========================================
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
-with st.spinner('Sincronizando satélites y radares...'):
+with st.spinner('Sincronizando modelos de satélite...'):
     df_inundacion, df_fuego = obtener_datos_completos()
     enlace_radar = obtener_capa_radar()
 
 if not enlace_radar:
-    st.info("🛰️ Enlace con radar temporalmente congestionado.")
+    st.info("🛰️ Enlace con radar de precipitaciones temporalmente congestionado.")
 
 tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
 
 # --- PESTAÑA 1: INUNDACIONES ---
 with tab_agua:
     if "Sin Datos" in df_inundacion["Categoria"].values: 
-        st.warning("Aviso: Disrupción temporal en algunas localidades. Verifique enlace satelital.")
+        st.warning("Aviso: Disrupción temporal en algunas localidades.")
     
-    col1, col2 = st.columns([1, 2])
+    st.markdown("#### Análisis de Cuencas Global")
+    # Gráfico ahora ocupa el ancho completo para mejor legibilidad
+    fig_agua = px.scatter(
+        df_inundacion, 
+        x="Lluvia_14d", 
+        y="Pronostico_3d", 
+        color="Categoria", 
+        hover_name="Ciudad", 
+        hover_data=["Afluente", "Indice"],
+        color_discrete_map={
+            "Normal": "#10B981", 
+            "Alerta Amarilla": "#FBBF24", 
+            "Alerta Naranja": "#F97316", 
+            "Alerta Roja": "#DC2626", 
+            "Sin Datos": "#94A3B8"
+        }, 
+        height=300, 
+        template="plotly_white"
+    )
+    st.plotly_chart(fig_agua, use_container_width=True)
+    
+    # Separamos en dos mapas
+    col1, col2 = st.columns(2)
+    
     with col1:
-        st.markdown("#### Análisis de Cuencas")
-        
-        fig_agua = px.scatter(
-            df_inundacion, 
-            x="Lluvia_14d", 
-            y="Pronostico_3d", 
-            color="Categoria", 
-            hover_name="Ciudad", 
-            hover_data=["Afluente", "Indice"],
-            color_discrete_map={
-                "Normal": "#10B981", 
-                "Alerta Amarilla": "#FBBF24", 
-                "Alerta Naranja": "#F97316", 
-                "Alerta Roja": "#DC2626", 
-                "Sin Datos": "#94A3B8"
-            }, 
-            height=450, 
-            template="plotly_white"
-        )
-        st.plotly_chart(fig_agua, use_container_width=True)
-    
-    with col2:
-        st.markdown("#### Despliegue Geográfico")
-        mapa_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
-        colores_agua = {
-            "Normal": "green", 
-            "Alerta Amarilla": "orange", 
-            "Alerta Naranja": "red", 
-            "Alerta Roja": "darkred", 
-            "Sin Datos": "gray"
-        }
-        
-        if enlace_radar:
-            folium.TileLayer(
-                tiles=enlace_radar, 
-                attr="RainViewer", 
-                name="Radar Meteorológico", 
-                overlay=True, 
-                control=True, 
-                opacity=0.6
-            ).add_to(mapa_agua)
+        st.markdown("#### Mapa de Índice de Inundación")
+        mapa_indice_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
+        colores_agua = {"Normal": "green", "Alerta Amarilla": "orange", "Alerta Naranja": "red", "Alerta Roja": "darkred", "Sin Datos": "gray"}
         
         for idx, fila in df_inundacion.iterrows():
-            texto_popup = (
-                f"<b>{fila['Ciudad']}</b><br>"
-                f"Río: {fila['Afluente']}<br>"
-                f"Índice: {fila['Indice']}<br>"
-                f"Situación: <b>{fila['Categoria']}</b>"
-            )
-            
             folium.CircleMarker(
                 location=[fila['Latitud'], fila['Longitud']], 
                 radius=10,
-                tooltip=texto_popup,
-                color=colores_agua.get(fila['Categoria'], "gray"), 
-                fill=True, 
-                fill_opacity=0.7
-            ).add_to(mapa_agua)
-            
-            html_icono = (
-                f'<div style="font-size: 11pt; font-weight: bold; '
-                f'color: #1E293B; text-shadow: 1px 1px 3px white; '
-                f'margin-left: 15px; margin-top: -10px;">{fila["Indice"]}</div>'
-            )
+                tooltip=f"<b>{fila['Ciudad']}</b><br>Índice: {fila['Indice']}<br>Situación: <b>{fila['Categoria']}</b>",
+                color=colores_agua.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7
+            ).add_to(mapa_indice_agua)
             
             folium.Marker(
                 location=[fila['Latitud'], fila['Longitud']],
-                icon=folium.DivIcon(html=html_icono)
-            ).add_to(mapa_agua)
+                icon=folium.DivIcon(html=f'<div style="font-size: 11pt; font-weight: bold; color: #1E293B; text-shadow: 1px 1px 3px white; margin-left: 15px; margin-top: -10px;">{fila["Indice"]}</div>')
+            ).add_to(mapa_indice_agua)
+        components.html(mapa_indice_agua._repr_html_(), height=450)
+        
+    with col2:
+        st.markdown("#### Mapa Meteorológico Satelital")
+        mapa_meteo = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
+        
+        if enlace_radar:
+            folium.TileLayer(tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias", overlay=True, control=True, opacity=0.7).add_to(mapa_meteo)
             
-        folium.LayerControl().add_to(mapa_agua)
-        components.html(mapa_agua._repr_html_(), height=500)
+        for idx, fila in df_inundacion.iterrows():
+            folium.CircleMarker(
+                location=[fila['Latitud'], fila['Longitud']], 
+                radius=6,
+                tooltip=f"<b>{fila['Ciudad']}</b><br>Lluvia pasada: {fila['Lluvia_14d']} mm<br>Pronóstico 3d: {fila['Pronostico_3d']} mm",
+                color="#3B82F6", fill=True, fill_opacity=0.5
+            ).add_to(mapa_meteo)
+        
+        folium.LayerControl().add_to(mapa_meteo)
+        components.html(mapa_meteo._repr_html_(), height=450)
 
 # --- PESTAÑA 2: INCENDIOS ---
 with tab_fuego:
     if "Sin Datos" in df_fuego["Categoria"].values: 
-        st.warning("Aviso: Disrupción temporal en algunas localidades. Verifique enlace satelital.")
+        st.warning("Aviso: Disrupción temporal en algunas localidades.")
     
-    col3, col4 = st.columns([1, 2])
+    st.markdown("#### Índice de Vulnerabilidad Forestal (RFO)")
+    fig_fuego = px.scatter(
+        df_fuego, 
+        x="PSE", 
+        y="RFO", 
+        color="Categoria", 
+        hover_name="Ciudad",
+        color_discrete_map={
+            "Mínimo": "#10B981", 
+            "Bajo": "#3B82F6", 
+            "Medio": "#FBBF24", 
+            "Alto": "#F97316", 
+            "Crítico": "#DC2626", 
+            "Sin Datos": "#94A3B8"
+        }, 
+        height=300, 
+        template="plotly_white"
+    )
+    st.plotly_chart(fig_fuego, use_container_width=True)
+    
+    col3, col4 = st.columns(2)
+    
     with col3:
-        st.markdown("#### Índice de Vulnerabilidad (RFO)")
-        
-        fig_fuego = px.scatter(
-            df_fuego, 
-            x="PSE", 
-            y="RFO", 
-            color="Categoria", 
-            hover_name="Ciudad",
-            color_discrete_map={
-                "Mínimo": "#10B981", 
-                "Bajo": "#3B82F6", 
-                "Medio": "#FBBF24", 
-                "Alto": "#F97316", 
-                "Crítico": "#DC2626", 
-                "Sin Datos": "#94A3B8"
-            }, 
-            height=450, 
-            template="plotly_white"
-        )
-        st.plotly_chart(fig_fuego, use_container_width=True)
-    
-    with col4:
-        st.markdown("#### Cartografía de Riesgo")
+        st.markdown("#### Mapa de Índice (RFO)")
         mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
-        colores_fuego = {
-            "Mínimo": "green", 
-            "Bajo": "blue", 
-            "Medio": "orange", 
-            "Alto": "red", 
-            "Crítico": "darkred", 
-            "Sin Datos": "gray"
-        }
-        
-        if enlace_radar:
-            folium.TileLayer(
-                tiles=enlace_radar, 
-                attr="RainViewer", 
-                name="Radar Meteorológico", 
-                overlay=True, 
-                control=True, 
-                opacity=0.6
-            ).add_to(mapa_fuego)
+        colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
         
         for idx, fila in df_fuego.iterrows():
-            texto_fuego = (
-                f"<b>{fila['Ciudad']}</b><br>"
-                f"RFO: {fila['RFO']}<br>"
-                f"Nivel: <b>{fila['Categoria']}</b>"
-            )
-            
             folium.CircleMarker(
                 location=[fila['Latitud'], fila['Longitud']], 
                 radius=9,
-                tooltip=texto_fuego,
-                color=colores_fuego.get(fila['Categoria'], "gray"), 
-                fill=True, 
-                fill_opacity=0.7
+                tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Nivel: <b>{fila['Categoria']}</b>",
+                color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7
             ).add_to(mapa_fuego)
-                
-        folium.LayerControl().add_to(mapa_fuego)
-        components.html(mapa_fuego._repr_html_(), height=500)
+        components.html(mapa_fuego._repr_html_(), height=450)
+        
+    with col4:
+        st.markdown("#### Mapa de Calor (Estrés Hídrico/Sequía)")
+        # Fondo oscuro para resaltar el calor
+        mapa_calor = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
+        
+        # Matemática para Calor Inverso: (Lluvia máxima registrada - Lluvia de esta ciudad) 
+        # Zonas con menos lluvia = puntaje de calor más alto (Rojo)
+        lluvia_maxima = df_fuego['Precip_90d'].max()
+        df_fuego['Peso_Sequia'] = df_fuego['Precip_90d'].apply(lambda x: lluvia_maxima - x + 10) # +10 de base para que zonas llovedoras igual se vean levemente
+        
+        # Preparamos la matriz de calor para Folium
+        heat_data = [[row['Latitud'], row['Longitud'], row['Peso_Sequia']] for idx, row in df_fuego.iterrows()]
+        
+        # El gradiente va de azul (menos seco) a rojo intenso (muy seco)
+        HeatMap(
+            heat_data,
+            radius=35,
+            blur=25,
+            gradient={0.2: 'blue', 0.4: 'cyan', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}
+        ).add_to(mapa_calor)
+        
+        components.html(mapa_calor._repr_html_(), height=450)
