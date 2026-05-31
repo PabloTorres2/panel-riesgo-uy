@@ -25,15 +25,14 @@ components.html(ga_script, height=0, width=0)
 col_logo, col_titulo = st.columns([1, 7])
 
 with col_logo:
-    # Ahora Streamlit leerá la foto directamente desde tus propios archivos
-    st.image("cabecera.jpg", use_container_width=True)
+    # Escarapela oficial de la FAU alojada en servidor seguro (Wikimedia)
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Roundel_of_Uruguay.svg/240px-Roundel_of_Uruguay.svg.png", use_container_width=True)
 
 with col_titulo:
     st.title("Sistema de Vigilancia Territorial")
     st.markdown("**FUERZA AÉREA URUGUAYA** | Plataforma integrada de evaluación de riesgos ambientales para el despliegue operativo.")
 
 st.divider()
-
 # ==========================================
 # 3. DICCIONARIOS GEOGRÁFICOS
 # ==========================================
