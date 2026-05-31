@@ -11,10 +11,8 @@ import time
 # ==========================================
 # 1. CONFIGURACIÓN DEL SISTEMA
 # ==========================================
-# Comando estricto: Debe ser la línea 1
 st.set_page_config(page_title="Vigilancia Territorial FAU", page_icon="✈️", layout="wide")
 
-# Rastreador de telemetría (Google Analytics)
 GA_ID = "G-XXXXXXXXXX" 
 ga_script = f"""<script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script><script>window.dataLayer = window.dataLayer || []; function gtag(){{dataLayer.push(arguments);}} gtag('js', new Date()); gtag('config', '{GA_ID}');</script>"""
 components.html(ga_script, height=0, width=0)
@@ -25,7 +23,6 @@ components.html(ga_script, height=0, width=0)
 col_logo, col_titulo = st.columns([1, 7])
 
 with col_logo:
-    # Actualizado al formato vectorial sin fondo
     st.image("FAU.svg", use_container_width=True)
 
 with col_titulo:
@@ -75,8 +72,22 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN (PARALELOS)
+# 4. MOTORES DE EXTRACCIÓN Y RADARES
 # ==========================================
+
+# --- NUEVO: INTERCEPTOR DE RADAR RAINVIEWER ---
+@st.cache_data(ttl=600) # Se actualiza cada 10 minutos
+def obtener_capa_radar():
+    try:
+        res = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=4)
+        data = res.json()
+        latest_time = data["radar"]["past"][-1]["time"]
+        host = data["host"]
+        # Formato de capa XYZ para inyectar en mapas
+        return f"{host}/v2/radar/{latest_time}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+    except:
+        return None
+
 def fetch_hidrico(info):
     try:
         url = "https://api.open-meteo.com/v1/forecast"
@@ -133,12 +144,12 @@ def obtener_datos_completos():
 
 
 # ==========================================
-# 5. PANELES DE CONTROL (TABS FRONT-END)
+# 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
-with st.spinner('Estableciendo conexión con satélites meteorológicos...'):
+with st.spinner('Estableciendo conexión con satélites y radares meteorológicos...'):
     df_inundacion, df_fuego = obtener_datos_completos()
+    enlace_radar = obtener_capa_radar() # Extraemos la capa satelital
 
-# Pestañas Nativas (Sin CSS forzado)
 tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
 
 # --- PESTAÑA 1: INUNDACIONES ---
@@ -158,6 +169,10 @@ with tab_agua:
         mapa_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
         colores_agua = {"Normal": "green", "Alerta Amarilla": "orange", "Alerta Naranja": "red", "Alerta Roja": "darkred", "Sin Datos": "gray"}
         
+        # Inyección de Capa Radar
+        if enlace_radar:
+            folium.TileLayer(tiles=enlace_radar, attr="RainViewer", name="Radar Meteorológico", overlay=True, control=True, opacity=0.6).add_to(mapa_agua)
+        
         for idx, fila in df_inundacion.iterrows():
             folium.CircleMarker(location=[fila['Latitud'], fila['Longitud']], radius=10,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>Río: {fila['Afluente']}<br>Índice: {fila['Indice']}<br>Situación: <b>{fila['Categoria']}</b>",
@@ -165,6 +180,8 @@ with tab_agua:
             folium.Marker(location=[fila['Latitud'], fila['Longitud']],
                 icon=folium.DivIcon(html=f'<div style="font-size: 11pt; font-weight: bold; color: #1E293B; text-shadow: 1px 1px 3px white; margin-left: 15px; margin-top: -10px;">{fila["Indice"]}</div>')
             ).add_to(mapa_agua)
+            
+        folium.LayerControl().add_to(mapa_agua) # Añade el botón para apagar/prender capas
         components.html(mapa_agua._repr_html_(), height=500)
 
 # --- PESTAÑA 2: INCENDIOS ---
@@ -184,8 +201,14 @@ with tab_fuego:
         mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB positron")
         colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
         
+        # Inyección de Capa Radar
+        if enlace_radar:
+            folium.TileLayer(tiles=enlace_radar, attr="RainViewer", name="Radar Meteorológico", overlay=True, control=True, opacity=0.6).add_to(mapa_fuego)
+        
         for idx, fila in df_fuego.iterrows():
             folium.CircleMarker(location=[fila['Latitud'], fila['Longitud']], radius=9,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Nivel: <b>{fila['Categoria']}</b>",
                 color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7).add_to(mapa_fuego)
+                
+        folium.LayerControl().add_to(mapa_fuego) # Añade el botón para apagar/prender capas
         components.html(mapa_fuego._repr_html_(), height=500)
