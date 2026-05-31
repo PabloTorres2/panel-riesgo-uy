@@ -25,8 +25,8 @@ components.html(ga_script, height=0, width=0)
 col_logo, col_titulo = st.columns([1, 7])
 
 with col_logo:
-    # La imagen ahora carga directamente desde tu archivo fau.png
-    st.image("fau.png", use_container_width=True)
+    # Actualizado al formato vectorial sin fondo
+    st.image("FAU.svg", use_container_width=True)
 
 with col_titulo:
     st.title("Sistema de Vigilancia Territorial")
