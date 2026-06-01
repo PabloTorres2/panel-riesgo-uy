@@ -87,8 +87,59 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN Y CÁLCULO
+# 4. MOTORES DE EXTRACCIÓN (METEO Y FIRMS)
 # ==========================================
+
+class FirmsProvider:
+    """Adaptador para fuentes de datos de anomalías térmicas (FIRMS/NASA)"""
+    def __init__(self):
+        self.url_base = "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_South_America_24h.csv"
+        
+    def clasificar_frp(self, frp):
+        """Categorización operacional de la Potencia Radiativa (MW)"""
+        try:
+            val = float(frp)
+            if val < 10: return "BAJO", "orange"
+            elif val < 50: return "MODERADO", "lightred"
+            elif val < 200: return "ALTO", "red"
+            else: return "SEVERO", "darkred"
+        except:
+            return "DESCONOCIDO", "gray"
+
+    def obtener_focos(self):
+        try:
+            df = pd.read_csv(self.url_base)
+            # Filtro Táctico: Caja delimitadora del territorio Uruguayo
+            df_uy = df[(df['latitude'] >= -35.5) & (df['latitude'] <= -30.0) & 
+                       (df['longitude'] >= -58.5) & (df['longitude'] <= -53.0)].copy()
+            
+            # Aplicamos la clasificación
+            df_uy[['Nivel_FRP', 'Color_FRP']] = df_uy.apply(
+                lambda row: pd.Series(self.clasificar_frp(row['frp'])), axis=1
+            )
+            return df_uy
+        except Exception as e:
+            return pd.DataFrame()
+
+# Instanciamos el proveedor
+proveedor_firms = FirmsProvider()
+
+@st.cache_data(ttl=1800)
+def obtener_focos_firms_seguro():
+    return proveedor_firms.obtener_focos()
+
+def obtener_capa_radar():
+    try:
+        res = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            latest_path = data["radar"]["past"][-1]["path"]
+            host = data["host"]
+            return f"{host}{latest_path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+        return None
+    except:
+        return None
+
 def fetch_hidrico(info):
     try:
         time.sleep(random.uniform(0.1, 0.7)) 
@@ -107,10 +158,9 @@ def fetch_hidrico(info):
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         
-        # Extraemos la telemetría detallada de precipitaciones
         serie_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3]
         ll_pasada_total = serie_pasada.sum()
-        ll_ultima_24h = serie_pasada.iloc[-1] # Lluvia específica del último día registrado
+        ll_ultima_24h = serie_pasada.iloc[-1] 
         ll_futura = df_c['precipitation_sum'].fillna(0).iloc[-3:].sum()
         
         idx = ((ll_pasada_total * 0.3) + (ll_futura * 0.7)) * info["coef_v"]
@@ -125,7 +175,7 @@ def fetch_hidrico(info):
             "Afluente": info["Afluente"], 
             "Latitud": info["lat"], 
             "Longitud": info["lon"], 
-            "Lluvia_24h": round(ll_ultima_24h, 1), # Nuevo dato: Lluvia reciente
+            "Lluvia_24h": round(ll_ultima_24h, 1), 
             "Lluvia_14d": round(ll_pasada_total, 1), 
             "Pronostico_3d": round(ll_futura, 1), 
             "Indice": round(idx, 2), 
@@ -199,47 +249,25 @@ def obtener_datos_completos():
         for f in concurrent.futures.as_completed(f_fuego): 
             r_fuego.append(f.result())
             
-    # Sellamos la hora exacta de la última descarga de satélites
     hora_actualizacion = datetime.now().strftime("%d/%m/%Y a las %H:%M:%S")
     return pd.DataFrame(r_agua), pd.DataFrame(r_fuego), hora_actualizacion
-
 
 # ==========================================
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
-with st.spinner('Sincronizando modelos de Open-Meteo...'):
-    # Ahora la función nos devuelve 3 cosas (incluyendo la hora)
+with st.spinner('Sincronizando constelaciones satelitales (Meteo + VIIRS NASA)...'):
     df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos()
+    df_firms = obtener_focos_firms_seguro()
+    enlace_radar = obtener_capa_radar()
 
-# TESTIGO VISUAL DE ACTUALIZACIÓN
-st.info(f"📡 **ENLACE SATELITAL ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
+st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
 
-tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
+tab_agua, tab_fuego, tab_radar = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD Y FOCOS (FIRMS)", "📡 RADAR ESPACIO AÉREO"])
 
 # --- PESTAÑA 1: INUNDACIONES ---
 with tab_agua:
     if "Sin Datos" in df_inundacion["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
-    
-    st.markdown("#### Análisis de Cuencas Global")
-    fig_agua = px.scatter(
-        df_inundacion, 
-        x="Lluvia_14d", 
-        y="Pronostico_3d", 
-        color="Categoria", 
-        hover_name="Ciudad", 
-        hover_data=["Afluente", "Indice"],
-        color_discrete_map={
-            "Normal": "#10B981", 
-            "Alerta Amarilla": "#FBBF24", 
-            "Alerta Naranja": "#F97316", 
-            "Alerta Roja": "#DC2626", 
-            "Sin Datos": "#94A3B8"
-        }, 
-        height=300, 
-        template="plotly_white"
-    )
-    st.plotly_chart(fig_agua, use_container_width=True)
     
     col1, col2 = st.columns(2)
     
@@ -263,23 +291,16 @@ with tab_agua:
         components.html(mapa_indice_agua._repr_html_(), height=450)
         
     with col2:
-        st.markdown("#### Mapa Meteorológico Satelital")
+        st.markdown("#### Mapa Telemetría Base (Precipitaciones)")
         mapa_meteo = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
-        folium.WmsTileLayer(
-            url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
-            layers="goes_conus_ir",
-            name="Satélite GOES-16 (IR)",
-            attr="Iowa Environmental Mesonet (IEM)",
-            format="image/png",
-            transparent=True,
-            overlay=True,
-            control=True,
-            opacity=0.5
-        ).add_to(mapa_meteo)
+        if enlace_radar:
+            folium.TileLayer(
+                tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias (Estático)", 
+                overlay=True, control=True, opacity=0.7
+            ).add_to(mapa_meteo)
             
         for idx, fila in df_inundacion.iterrows():
-            # Tooltip interactivo con formato profesional y datos divididos
             etiqueta_intuitiva = f"""
             <div style='min-width: 160px; font-family: sans-serif;'>
                 <h4 style='margin-bottom: 5px; color: #1E293B;'>{fila['Ciudad']}</h4>
@@ -289,8 +310,6 @@ with tab_agua:
                 <span style='color: #D97706;'>🔮 <b>Pronóstico (3d):</b> {fila['Pronostico_3d']} mm</span>
             </div>
             """
-            
-            # El tamaño del círculo ahora varía de forma intuitiva según cuánta lluvia acumulada hay
             radio_dinamico = max(5, min(fila['Lluvia_14d'] / 10, 18))
             
             folium.CircleMarker(
@@ -300,66 +319,62 @@ with tab_agua:
                 color="#3B82F6", fill=True, fill_opacity=0.6
             ).add_to(mapa_meteo)
         
-        folium.LayerControl().add_to(mapa_meteo)
         components.html(mapa_meteo._repr_html_(), height=450)
 
-# --- PESTAÑA 2: INCENDIOS ---
+# --- PESTAÑA 2: INCENDIOS + FIRMS ---
 with tab_fuego:
     if "Sin Datos" in df_fuego["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
-    
-    st.markdown("#### Índice de Vulnerabilidad Forestal (RFO)")
-    fig_fuego = px.scatter(
-        df_fuego, 
-        x="PSE", 
-        y="RFO", 
-        color="Categoria", 
-        hover_name="Ciudad",
-        color_discrete_map={
-            "Mínimo": "#10B981", 
-            "Bajo": "#3B82F6", 
-            "Medio": "#FBBF24", 
-            "Alto": "#F97316", 
-            "Crítico": "#DC2626", 
-            "Sin Datos": "#94A3B8"
-        }, 
-        height=300, 
-        template="plotly_white"
-    )
-    st.plotly_chart(fig_fuego, use_container_width=True)
+        
+    # Testigo de FIRMS con escalada de alertas
+    if not df_firms.empty:
+        focos_totales = len(df_firms)
+        focos_criticos = len(df_firms[df_firms['Nivel_FRP'].isin(['ALTO', 'SEVERO'])])
+        
+        if focos_criticos > 0:
+            st.error(f"🚨 **ALERTA ROJA ISR:** {focos_criticos} focos de calor CRÍTICOS/ALTOS detectados. Despliegue de reconocimiento recomendado.")
+        elif focos_totales > 0:
+            st.warning(f"⚠️ **ACTIVIDAD DETECTADA:** {focos_totales} focos de calor (Nivel Bajo/Moderado). Mantener vigilancia rutinaria.")
+    else:
+        st.success("✅ **REPORTE ISR:** Sin detecciones de anomalías térmicas en las últimas 24 horas (Satélite VIIRS).")
     
     col3, col4 = st.columns(2)
     
     with col3:
-        st.markdown("#### Mapa de Índice (RFO) y Satélite GOES-16")
+        st.markdown("#### Matriz RFO + Focos Térmicos (FIRMS)")
         mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
-        
-        folium.WmsTileLayer(
-            url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
-            layers="goes_conus_ir",
-            name="Satélite GOES-16 (IR)",
-            attr="Iowa Environmental Mesonet (IEM)",
-            format="image/png",
-            transparent=True,
-            overlay=True,
-            control=True,
-            opacity=0.5
-        ).add_to(mapa_fuego)
         
         for idx, fila in df_fuego.iterrows():
             folium.CircleMarker(
                 location=[fila['Latitud'], fila['Longitud']], 
-                radius=9,
+                radius=10,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Nivel: <b>{fila['Categoria']}</b>",
-                color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7
+                color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.4
             ).add_to(mapa_fuego)
             
-        folium.LayerControl().add_to(mapa_fuego)
-        components.html(mapa_fuego._repr_html_(), height=450)
+        if not df_firms.empty:
+            for idx, foco in df_firms.iterrows():
+                etiqueta_firms = f"""
+                <div style='min-width: 160px; font-family: sans-serif;'>
+                    <h4 style='margin-bottom: 5px; color: {foco['Color_FRP']};'>🔥 FOCO {foco['Nivel_FRP']}</h4>
+                    <hr style='margin: 2px 0;'>
+                    <b>Potencia (FRP):</b> {foco['frp']} MW<br>
+                    <b>Confianza:</b> {foco.get('confidence', 'N/A')}<br>
+                    <b>Hora (UTC):</b> {foco.get('acq_time', 'N/A')}<br>
+                    <b>Lat/Lon:</b> {foco['latitude']:.4f}, {foco['longitude']:.4f}
+                </div>
+                """
+                folium.Marker(
+                    location=[foco['latitude'], foco['longitude']],
+                    icon=folium.Icon(color=foco['Color_FRP'], icon="fire", prefix="fa"),
+                    tooltip=etiqueta_firms
+                ).add_to(mapa_fuego)
+            
+        components.html(mapa_fuego._repr_html_(), height=500)
         
     with col4:
-        st.markdown("#### Mapa de Calor (Estrés Hídrico/Sequía)")
+        st.markdown("#### Mapa de Calor (Estrés Hídrico Previo)")
         mapa_calor = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
         lluvia_maxima = df_fuego['Precip_90d'].max()
@@ -374,4 +389,12 @@ with tab_fuego:
             gradient={0.2: 'blue', 0.4: 'cyan', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}
         ).add_to(mapa_calor)
         
-        components.html(mapa_calor._repr_html_(), height=450)
+        components.html(mapa_calor._repr_html_(), height=500)
+
+# --- PESTAÑA 3: RADAR ANIMADO ---
+with tab_radar:
+    st.markdown("#### Monitor Táctico (Windy)")
+    iframe_windy = """
+    <iframe width="100%" height="600" src="https://embed.windy.com/embed2.html?lat=-32.5&lon=-56.0&zoom=6&level=surface&overlay=radar&product=radar&menu=&message=&marker=&calendar=now&city=&type=map&location=coordinates&detail=&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1" frameborder="0"></iframe>
+    """
+    components.html(iframe_windy, height=600)
