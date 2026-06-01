@@ -20,7 +20,7 @@ st.set_page_config(
     layout="wide"
 )
 
-GA_ID = "G-XXXXXXXXXX" 
+GA_ID = "G-7F3944JTSG" 
 ga_script = f"""
 <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
 <script>
