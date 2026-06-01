@@ -91,7 +91,7 @@ monitoreo_fuego = {
     "Tacuarembó": {"lat": -31.71, "lon": -55.98, "coef_a": 0.8}, "Treinta y Tres": {"lat": -33.23, "lon": -54.38, "coef_a": 0.7}
 }
 
-# Unidades FAU Operativas (Velocidad crucero Helo/Avión Ligero en km/h)
+# Unidades FAU Operativas
 unidades_fau = {
     "Brigada Aérea I (Carrasco)": {"lat": -34.833, "lon": -56.033, "vel_kmh": 200},
     "Brigada Aérea II (Durazno)": {"lat": -33.353, "lon": -56.498, "vel_kmh": 200},
@@ -112,18 +112,16 @@ def haversine(lat1, lon1, lat2, lon2):
 
 class MotorInteligencia:
     def __init__(self):
-        # Infraestructura Genérica (Fuego)
         self.infra_general = {
             "aerodromos": [{"nombre": "Aeropuerto de Rivera", "lat": -30.9, "lon": -55.5}, {"nombre": "Aeródromo Santa Bernardina", "lat": -33.35, "lon": -56.49}],
             "rutas": [{"nombre": "Ruta Nacional Primaria", "lat": -33.0, "lon": -56.0}],
             "subestaciones": [{"nombre": "Subestación UTE Transmisión", "lat": -34.0, "lon": -56.2}],
             "poblados": [{"nombre": "Centro Urbano", "lat": -33.5, "lon": -56.5}]
         }
-        # Infraestructura Hídrica Crítica
         self.infra_hidrica = {
             "represas": [{"nombre": "Represa Salto Grande", "lat": -31.27, "lon": -57.94}, {"nombre": "Represa Palmar", "lat": -33.05, "lon": -57.48}],
             "plantas_ose": [{"nombre": "Planta Aguas Corrientes", "lat": -34.52, "lon": -56.32}, {"nombre": "Toma OSE Durazno", "lat": -33.37, "lon": -56.50}],
-            "puentes": [{"nombre": "Puente Internacional S. Martín", "lat": -33.10, "lon": -58.31}, {"nombre": "Puente Río Yí", "lat": -33.36, "lon": -56.51}],
+            "puentes": [{"nombre": "Puente S. Martín", "lat": -33.10, "lon": -58.31}, {"nombre": "Puente Río Yí", "lat": -33.36, "lon": -56.51}],
             "hospitales": [{"nombre": "Hospital Tacuarembó", "lat": -31.71, "lon": -55.98}, {"nombre": "Hospital Durazno", "lat": -33.38, "lon": -56.52}]
         }
 
@@ -166,9 +164,10 @@ class MotorInteligencia:
         if exposicion == 0: exposicion = 0.1 
         prioridad_final = amenaza * exposicion * 100
         
-        if prioridad_final > 75: return "ALTA", "red", round(prioridad_final, 1), "Extinción Aérea / Evacuación (Helo)"
-        elif prioridad_final > 35: return "MODERADA", "orange", round(prioridad_final, 1), "Reconocimiento Táctico (Avión Ligero)"
-        else: return "BAJA", "green", round(prioridad_final, 1), "Monitoreo Satelital (Sin Despliegue)"
+        # Devolvemos también amenaza y exposición para trazabilidad analítica
+        if prioridad_final > 75: return "ALTA", "red", round(prioridad_final, 1), "Extinción / Evacuación", round(amenaza, 2), round(exposicion, 2)
+        elif prioridad_final > 35: return "MODERADA", "orange", round(prioridad_final, 1), "Reconocimiento Táctico", round(amenaza, 2), round(exposicion, 2)
+        else: return "BAJA", "green", round(prioridad_final, 1), "Monitoreo Satelital", round(amenaza, 2), round(exposicion, 2)
 
     def calcular_prioridad_hidrica(self, ihi, distancias):
         amenaza = min(float(ihi) / 100.0, 1.0) 
@@ -180,21 +179,17 @@ class MotorInteligencia:
         if exposicion == 0: exposicion = 0.1 
         prioridad_final = amenaza * exposicion * 100
         
-        if prioridad_final > 70: return "CRÍTICA", "darkred", round(prioridad_final, 1), "Evacuación SAR / Aeromédica (Bell 212)"
-        elif prioridad_final > 40: return "ALTA", "red", round(prioridad_final, 1), "Transporte de Suministros (C-130/C-212)"
-        elif prioridad_final > 20: return "ATENCIÓN", "orange", round(prioridad_final, 1), "Reconocimiento de Cuenca (UAV/Avión Ligero)"
-        else: return "NORMAL", "green", round(prioridad_final, 1), "Monitoreo Estándar (Sin Despliegue)"
+        if prioridad_final > 70: return "CRÍTICA", "darkred", round(prioridad_final, 1), "Evacuación SAR / Aeromédica", round(amenaza, 2), round(exposicion, 2)
+        elif prioridad_final > 40: return "ALTA", "red", round(prioridad_final, 1), "Transporte de Suministros", round(amenaza, 2), round(exposicion, 2)
+        elif prioridad_final > 20: return "ATENCIÓN", "orange", round(prioridad_final, 1), "Reconocimiento de Cuenca", round(amenaza, 2), round(exposicion, 2)
+        else: return "NORMAL", "green", round(prioridad_final, 1), "Monitoreo Estándar", round(amenaza, 2), round(exposicion, 2)
 
     def aplicar_dbscan_hidrico(self, df):
-        """Agrupa cuencas desbordadas cercanas en Eventos Macro"""
         df_riesgo = df[df['IHI'] >= 20].copy()
         if df_riesgo.empty: return pd.DataFrame()
-        
         coords = df_riesgo[['Latitud', 'Longitud']].values
-        # Epsilon 0.4 (aprox 45km). Si dos ciudades en alerta están cerca, es la misma zona de inundación
         db = DBSCAN(eps=0.4, min_samples=1, metric='euclidean').fit(coords)
         df_riesgo['cluster'] = db.labels_
-        
         eventos = []
         for cluster_id, group in df_riesgo.groupby('cluster'):
             ihi_max = group['IHI'].max()
@@ -202,7 +197,6 @@ class MotorInteligencia:
             lon_c = group['Longitud'].mean()
             afluentes = list(set(group['Afluente']))
             ciudades = ", ".join(group['Ciudad'].tolist())
-            
             eventos.append({
                 'evento_id': f"ZONA-{cluster_id+1:03d}",
                 'Latitud': lat_c, 'Longitud': lon_c, 'IHI_Max': round(ihi_max, 1),
@@ -306,7 +300,6 @@ def fetch_hidrico(info):
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         
-        # Histórico y predicción a 24/48/72 horas
         serie_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3]
         serie_futura = df_c['precipitation_sum'].fillna(0).iloc[-3:]
         
@@ -317,7 +310,6 @@ def fetch_hidrico(info):
         ll_futura_72h = serie_futura.iloc[2]
         ll_futura_total = serie_futura.sum()
         
-        # IHI: Índice Hídrico Integrado Operacional
         ihi = ((ll_pasada_total * 0.4) + (ll_futura_total * 0.6)) * info["coef_v"]
         
         if ihi < 15: cat = "Normal"
@@ -366,9 +358,8 @@ def fetch_fuego(ciudad, info):
     except:
         return {"Ciudad": ciudad, "Latitud": info["lat"], "Longitud": info["lon"], "PSE": 0, "RFO": 0, "Precip_90d": 0, "Categoria": "Sin Datos"}
 
-# ===> RENOMBRADA PARA EVITAR CACHÉ VIEJA <===
 @st.cache_data(ttl=3600)
-def obtener_datos_completos_v2():
+def obtener_datos_completos_v3():
     r_agua = []
     r_fuego = []
     
@@ -387,44 +378,49 @@ def obtener_datos_completos_v2():
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
 with st.spinner('Sincronizando Sistemas C4ISR y Constelaciones Satelitales...'):
-    df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos_v2()
+    df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos_v3()
     df_eventos_hidricos = motor_isr.aplicar_dbscan_hidrico(df_inundacion)
     df_incidentes, focos_crudos, metodo_filtro, detec_crudas = obtener_focos_firms_isr()
     enlace_radar = obtener_capa_radar()
 
 st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
 
-tab_agua, tab_fuego, tab_radar = st.tabs(["💧 EVENTOS HÍDRICOS (IHI)", "🌲 INCIDENTES FUEGO (RFO)", "📡 RADAR ESPACIO AÉREO"])
+# ¡AÑADIDA NUEVA PESTAÑA DOCTRINAL!
+tab_agua, tab_fuego, tab_radar, tab_doctrina = st.tabs(["💧 EVENTOS HÍDRICOS (IHI)", "🌲 INCIDENTES FUEGO (RFO)", "📡 RADAR ESPACIO AÉREO", "📚 CENTRO DE DOCTRINA"])
 
 # --- PESTAÑA 1: INUNDACIONES C4ISR ---
 with tab_agua:
+    # Metodología Oculta para no saturar al Operador
+    with st.expander("ⓘ Metodología Operacional Hídrica"):
+        st.markdown("""
+        **Evaluación Hídrica Integrada:** El sistema calcula un Índice Hídrico Integrado (IHI) utilizando precipitaciones históricas (14d), pronóstico meteorológico (72h), vulnerabilidad de cuenca e infraestructura expuesta. La priorización logística se calcula mediante la matriz: `Prioridad = Amenaza × Exposición`. Agrupación de eventos vía DBSCAN.
+        """)
+
     if "Sin Datos" in df_inundacion["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas cuencas.")
         
     inundaciones_criticas = len(df_inundacion[df_inundacion['IHI'] >= 70])
     if inundaciones_criticas > 0:
-        st.error(f"🚨 **ALERTA ROJA HÍDRICA:** {inundaciones_criticas} cuencas en estado de Emergencia/Alerta. Despliegue de reconocimiento aéreo recomendado.")
+        st.error(f"🚨 **ALERTA ROJA HÍDRICA:** {inundaciones_criticas} cuencas en estado de Emergencia. Despliegue recomendado.")
     else:
         st.success("✅ **REPORTE ISR:** Sistemas hídricos dentro de los umbrales operativos.")
     
-    # RANKING NACIONAL HÍDRICO (Nuevo Módulo C4ISR)
     if not df_eventos_hidricos.empty:
         st.markdown("### 🏆 RANKING TÁCTICO HÍDRICO (ZONAS AFECTADAS)")
-        st.markdown("Agrupación por Machine Learning de Cuencas desbordadas y asignación de misión FAU.")
         
         datos_ranking_hidrico = []
         for idx, evento in df_eventos_hidricos.iterrows():
             lat, lon = evento['Latitud'], evento['Longitud']
             ihi_zona = evento['IHI_Max']
             distancias = motor_isr.buscar_infraestructura(lat, lon, tipo="hidrica")
-            nivel_prioridad, color_rep, score, mision = motor_isr.calcular_prioridad_hidrica(ihi_zona, distancias)
+            nivel_prioridad, color_rep, score, mision, amenaza, exposicion = motor_isr.calcular_prioridad_hidrica(ihi_zona, distancias)
             logistica_fau = motor_isr.calcular_eta_fau(lat, lon)
             
             datos_ranking_hidrico.append({
                 "ID": evento['evento_id'], "Prioridad": nivel_prioridad, "Score": score, "Color": color_rep,
                 "IHI": ihi_zona, "Sistemas": evento['Afluentes'], "Mision": mision,
                 "Base_FAU": logistica_fau['base'], "ETA": logistica_fau['eta_min'], 
-                "Represa": distancias['represas'], "Planta": distancias['plantas_ose']
+                "Amenaza": amenaza, "Exposicion": exposicion
             })
             
         datos_ranking_hidrico.sort(key=lambda x: x["Score"], reverse=True)
@@ -435,11 +431,11 @@ with tab_agua:
                 st.markdown(f"""
                 <div style="background-color: #0F172A; color: white; padding: 15px; border-radius: 8px; border-top: 5px solid {obj['Color']};">
                     <h4 style="margin-top:0; margin-bottom:5px; color: {obj['Color']};">{obj['ID']} | SCORE: {obj['Score']}</h4>
+                    <span style="font-family: monospace; font-size: 11px; color: #64748B;">[Trazabilidad] A: {obj['Amenaza']} | E: {obj['Exposicion']}</span>
                     <hr style="border-color: #334155; margin: 8px 0;">
                     <span style="font-size: 13px; color: #FBBF24;">🛡️ <b>Misión:</b> {obj['Mision']}</span><br>
                     <span style="font-size: 13px; color: #F8FAFC;">⏱️ <b>ETA Despliegue ({obj['Base_FAU']}):</b> {obj['ETA']} min</span><br>
-                    <span style="font-size: 13px; color: #94A3B8;">🌊 <b>Afluentes:</b> {obj['Sistemas']}</span><br>
-                    <span style="font-size: 13px; color: #94A3B8;">🏭 <b>Planta OSE Cercana:</b> a {obj['Planta'][0]:.1f} km</span>
+                    <span style="font-size: 13px; color: #94A3B8;">🌊 <b>Afluentes:</b> {obj['Sistemas']}</span>
                 </div>
                 """, unsafe_allow_html=True)
         st.divider()
@@ -451,11 +447,14 @@ with tab_agua:
         mapa_indice_agua = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         colores_agua = {"Normal": "green", "Atención": "orange", "Alerta": "red", "Emergencia": "darkred", "Sin Datos": "gray"}
         
+        heat_data_agua = [[row['Latitud'], row['Longitud'], float(row['IHI'])] for idx, row in df_inundacion.iterrows()]
+        HeatMap(heat_data_agua, radius=35, blur=25, gradient={0.4: 'green', 0.6: 'yellow', 0.8: 'red', 1.0: 'darkred'}).add_to(mapa_indice_agua)
+        
         for idx, fila in df_inundacion.iterrows():
             folium.CircleMarker(
                 location=[fila['Latitud'], fila['Longitud']], radius=8,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>Río: {fila['Afluente']}<br>IHI: {fila['IHI']}<br>Nivel: <b>{fila['Categoria']}</b>",
-                color=colores_agua.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.6
+                color=colores_agua.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.8
             ).add_to(mapa_indice_agua)
             
         if not df_eventos_hidricos.empty:
@@ -466,33 +465,26 @@ with tab_agua:
                     tooltip=f"<b>{ev['evento_id']}</b><br>IHI Máx: {ev['IHI_Max']}<br>Sistemas Afectados: {ev['Afluentes']}",
                     color="red", fill=True, fill_opacity=0.3
                 ).add_to(mapa_indice_agua)
-                
-                folium.Marker(
-                    location=[ev['Latitud'], ev['Longitud']], icon=folium.Icon(color="red", icon="tint", prefix="fa"),
-                ).add_to(mapa_indice_agua)
+                folium.Marker(location=[ev['Latitud'], ev['Longitud']], icon=folium.Icon(color="red", icon="tint", prefix="fa")).add_to(mapa_indice_agua)
             
         components.html(mapa_indice_agua._repr_html_(), height=500)
         
     with col2:
-        st.markdown("#### 🗺️ Mapa de Calor (Saturación y Pronóstico 72h)")
+        st.markdown("#### 🗺️ Mapa Meteorológico Base y Pronóstico 72h")
         mapa_meteo = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
-        # Heatmap Hídrico
-        heat_data_agua = [[row['Latitud'], row['Longitud'], float(row['IHI'])] for idx, row in df_inundacion.iterrows()]
-        HeatMap(heat_data_agua, radius=40, blur=25, gradient={0.3: 'blue', 0.6: 'cyan', 0.8: 'lime', 1.0: 'red'}).add_to(mapa_meteo)
+        if enlace_radar:
+            folium.TileLayer(tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias", overlay=True, control=True, opacity=0.7).add_to(mapa_meteo)
             
         for idx, fila in df_inundacion.iterrows():
             etiqueta_intuitiva = f"""
             <div style='min-width: 170px; font-family: sans-serif;'>
                 <h4 style='margin-bottom: 5px; color: #1E293B;'>{fila['Ciudad']}</h4>
-                <hr style='margin: 2px 0;'>
                 <span style='color: #047857;'>🌧️ <b>Acumulado (14d):</b> {fila['Lluvia_14d']} mm</span><br>
                 <hr style='margin: 2px 0;'>
-                <span style='color: #D97706;'><b>Predicción Meteorológica:</b></span><br>
-                • +24h: {fila['Futura_24h']} mm<br>
-                • +48h: {fila['Futura_48h']} mm<br>
-                • +72h: {fila['Futura_72h']} mm<br>
-                <b>Total Pronóstico:</b> {fila['Pronostico_3d']} mm
+                <span style='color: #D97706;'><b>Pronóstico:</b></span><br>
+                • +24h: {fila['Futura_24h']} mm | • +48h: {fila['Futura_48h']} mm | • +72h: {fila['Futura_72h']} mm<br>
+                <b>Total:</b> {fila['Pronostico_3d']} mm
             </div>
             """
             radio_dinamico = max(5, min(fila['Pronostico_3d'] / 5, 18))
@@ -505,24 +497,25 @@ with tab_agua:
 
 # --- PESTAÑA 2: INCENDIOS + FIRMS + INTELIGENCIA ---
 with tab_fuego:
+    with st.expander("ⓘ Metodología Operacional Fuego"):
+        st.markdown("""
+        **Evaluación de Amenaza Térmica:** Combina el Índice RFO (termodinámica del entorno) con detecciones satelitales VIIRS (NASA). Las detecciones múltiples se agrupan en un solo evento usando el algoritmo de Machine Learning DBSCAN. La Prioridad Operacional es producto directo del cruce espacial entre la Amenaza (Potencia Radiativa FRP + RFO) y la Exposición de Infraestructura Crítica (distancia geométrica en km).
+        """)
+
     if "Sin Datos" in df_fuego["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
         
     if not df_incidentes.empty:
-        incidentes_totales = len(df_incidentes)
         incidentes_criticos = len(df_incidentes[df_incidentes['Nivel_FRP'].isin(['ALTO', 'SEVERO'])])
-        
         if incidentes_criticos > 0:
             st.error(f"🚨 **ALERTA ROJA ISR:** {incidentes_criticos} INCIDENTES TÁCTICOS CRÍTICOS confirmados. Priorizando logística FAU.")
-        elif incidentes_totales > 0:
-            st.warning(f"⚠️ **ACTIVIDAD DETECTADA:** {incidentes_totales} incidentes aislados (Nivel Bajo/Moderado). Mantener vigilancia.")
+        else:
+            st.warning(f"⚠️ **ACTIVIDAD DETECTADA:** {len(df_incidentes)} incidentes aislados. Mantener vigilancia rutinaria.")
     else:
         st.success("✅ **REPORTE ISR:** Sin incidentes térmicos confirmados en las últimas 24 horas.")
     
-    # RANKING NACIONAL FUEGO C4ISR
     if not df_incidentes.empty:
         st.markdown("### 🏆 RANKING TÁCTICO FUEGO")
-        st.markdown("Incidentes priorizados automáticamente por el Motor Analítico.")
         
         datos_ranking = []
         for idx, foco in df_incidentes.iterrows():
@@ -530,13 +523,13 @@ with tab_fuego:
             frp = foco['frp_max']
             rfo_local = motor_isr.obtener_rfo_local_dinamico(lat, lon, df_fuego)
             distancias = motor_isr.buscar_infraestructura(lat, lon, tipo="general")
-            nivel_prioridad, color_rep, score, mision = motor_isr.calcular_prioridad_fuego(frp, rfo_local, distancias)
+            nivel_prioridad, color_rep, score, mision, amenaza, exposicion = motor_isr.calcular_prioridad_fuego(frp, rfo_local, distancias)
             logistica_fau = motor_isr.calcular_eta_fau(lat, lon)
             
             datos_ranking.append({
                 "ID": foco['incidente_id'], "Prioridad": nivel_prioridad, "Score": score, "Color": color_rep,
                 "FRP": frp, "Area": foco['area_km2'], "Mision": mision,
-                "Base_FAU": logistica_fau['base'], "ETA": logistica_fau['eta_min'], "Poblado": distancias['poblados']
+                "Base_FAU": logistica_fau['base'], "ETA": logistica_fau['eta_min'], "Amenaza": amenaza, "Exposicion": exposicion
             })
             
         datos_ranking.sort(key=lambda x: x["Score"], reverse=True)
@@ -547,11 +540,11 @@ with tab_fuego:
                 st.markdown(f"""
                 <div style="background-color: #0F172A; color: white; padding: 15px; border-radius: 8px; border-top: 5px solid {obj['Color']};">
                     <h4 style="margin-top:0; margin-bottom:5px; color: {obj['Color']};">{obj['ID']} | SCORE: {obj['Score']}</h4>
+                    <span style="font-family: monospace; font-size: 11px; color: #64748B;">[Trazabilidad] A: {obj['Amenaza']} | E: {obj['Exposicion']}</span>
                     <hr style="border-color: #334155; margin: 8px 0;">
                     <span style="font-size: 13px; color: #FBBF24;">🛡️ <b>Misión:</b> {obj['Mision']}</span><br>
                     <span style="font-size: 13px; color: #F8FAFC;">⏱️ <b>ETA Despliegue ({obj['Base_FAU']}):</b> {obj['ETA']} min</span><br>
-                    <span style="font-size: 13px; color: #94A3B8;">📏 <b>Área Estimada:</b> {obj['Area']} km²</span><br>
-                    <span style="font-size: 13px; color: #94A3B8;">🏘️ <b>Población:</b> a {obj['Poblado'][0]:.1f} km</span>
+                    <span style="font-size: 13px; color: #94A3B8;">📏 <b>Área Estimada:</b> {obj['Area']} km²</span>
                 </div>
                 """, unsafe_allow_html=True)
         st.divider()
@@ -575,12 +568,11 @@ with tab_fuego:
                 radio_incidente = max(8, min(foco['area_km2'] * 5, 25))
                 etiqueta_firms = f"""
                 <div style='min-width: 170px; font-family: sans-serif;'>
-                    <h4 style='margin-bottom: 5px; color: {foco['Color_FRP']};'>🔥 {foco['incidente_id']} | {foco['Nivel_FRP']}</h4>
+                    <h4 style='margin-bottom: 5px; color: {foco['Color_FRP']};'>🔥 {foco['incidente_id']}</h4>
                     <hr style='margin: 2px 0;'>
                     <b>Potencia Máx (FRP):</b> {foco['frp_max']} MW<br>
                     <b>Área Estimada:</b> {foco['area_km2']} km²<br>
-                    <b>Sensores Agrupados:</b> {foco['sensores']}<br>
-                    <b>Centroide:</b> {foco['latitude']:.3f}, {foco['longitude']:.3f}
+                    <b>Sensores Agrupados:</b> {foco['sensores']}
                 </div>
                 """
                 folium.CircleMarker(
@@ -594,12 +586,10 @@ with tab_fuego:
     with col4:
         st.markdown("#### 🗺️ Mapa de Calor (Estrés Hídrico Previo)")
         mapa_calor = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
-        
         lluvia_maxima = df_fuego['Precip_90d'].max()
         df_fuego['Peso_Sequia'] = df_fuego['Precip_90d'].apply(lambda x: lluvia_maxima - x + 10)
         heat_data = [[row['Latitud'], row['Longitud'], row['Peso_Sequia']] for idx, row in df_fuego.iterrows()]
         HeatMap(heat_data, radius=35, blur=25, gradient={0.2: 'blue', 0.4: 'cyan', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}).add_to(mapa_calor)
-        
         components.html(mapa_calor._repr_html_(), height=500)
 
 # --- PESTAÑA 3: RADAR ANIMADO ---
@@ -609,3 +599,47 @@ with tab_radar:
     <iframe width="100%" height="600" src="https://embed.windy.com/embed2.html?lat=-32.5&lon=-56.0&zoom=6&level=surface&overlay=radar&product=radar&menu=&message=&marker=&calendar=now&city=&type=map&location=coordinates&detail=&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1" frameborder="0"></iframe>
     """
     components.html(iframe_windy, height=600)
+
+# --- PESTAÑA 4: CENTRO DE DOCTRINA ---
+with tab_doctrina:
+    st.header("📚 Centro de Doctrina y Trazabilidad Analítica")
+    st.markdown("""
+    Este documento establece los principios matemáticos y algorítmicos que gobiernan la plataforma ISR de la Fuerza Aérea Uruguaya. El propósito de esta sección es garantizar la **trazabilidad, defendibilidad institucional y rigor científico** detrás de cada alerta generada en el Centro de Operaciones.
+    
+    ---
+
+    ### 1. Doctrina de Priorización Operacional (COP)
+    Todas las amenazas procesadas por el sistema (hídricas o térmicas) se evalúan bajo una matriz unificada de Comando y Control:
+    
+    $$ Prioridad = Amenaza \\times Exposici\\acute{o}n $$
+    
+    * **Amenaza:** El potencial destructivo del fenómeno (FRP para fuego, IHI para inundaciones).
+    * **Exposición:** El valor estratégico de la infraestructura afectada, calculada inversamente proporcional a su distancia euclidiana.
+
+    ---
+
+    ### 2. Motor de Evaluación Hídrica (IHI)
+    El **Índice Hídrico Integrado (IHI)** reemplaza la medición lineal de precipitaciones por un análisis predictivo de saturación de cuencas.
+
+    **Ecuación de Riesgo:**
+    $$ IHI = (\\text{Lluvia}_{14d} \\times 0.4 + \\text{Pronóstico}_{72h} \\times 0.6) \\times \\text{Coeficiente de Vulnerabilidad} $$
+    
+    * **Clustering:** Si múltiples nodos superan el umbral $IHI \\ge 20$ en un radio de 45 km, el motor **DBSCAN** los agrupa en un "Evento Macro" para evitar la dispersión de unidades de evacuación.
+    * **Fuente:** Open-Meteo (Historical & Forecasting API).
+
+    ---
+
+    ### 3. Motor de Inteligencia Forestal (RFO + FIRMS)
+    El riesgo forestal combina modelos termodinámicos previos con confirmación satelital en tiempo real.
+
+    1.  **RFO (Riesgo Forestal Operativo):** Algoritmo empírico de base termodinámica que procesa Temperatura, Humedad Relativa y Déficit de Precipitación (últimos 90 días).
+    2.  **FIRMS (Confirmación Satelital):** El sistema ingesta en vivo la red **VIIRS (Suomi-NPP)** de la NASA.
+    3.  **DBSCAN:** Las detecciones de píxeles VIIRS individuales ($375m \\times 375m$) se someten a un modelo de *Machine Learning* de agrupación espacial. Epsilon = 0.02 grados (~2.2 km). Esto previene que un incendio masivo genere múltiples falsas alertas, consolidándolo en un solo "Incidente Táctico".
+
+    ---
+
+    ### 4. Logística y ETA FAU
+    El sistema calcula el tiempo estimado de arribo (ETA) a la zona de impacto iterando sobre las coordenadas de las Brigadas Aéreas. 
+    * **Fórmula:** Haversine (Distancia ortodrómica real sobre la curvatura terrestre).
+    * **Velocidad de Despliegue:** Modelada sobre una constante de **200 km/h** (Estándar operativo de un helicóptero Bell 212 / UH-1H).
+    """)
