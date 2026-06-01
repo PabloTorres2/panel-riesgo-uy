@@ -134,7 +134,6 @@ class FirmsProvider:
 
         df['frp'] = pd.to_numeric(df.get('frp', 0), errors='coerce').fillna(0)
         
-        # Filtro inicial crudo para reducir carga de memoria antes de Geopandas
         df_bbox = df[(df['latitude'] >= -36.0) & (df['latitude'] <= -29.0) & 
                      (df['longitude'] >= -59.0) & (df['longitude'] <= -52.0)].copy()
         focos_originales = len(df_bbox)
@@ -205,12 +204,12 @@ class MotorInteligencia:
         elif prioridad_final > 35: return "MODERADA", "orange", round(prioridad_final, 1)
         else: return "BAJA", "green", round(prioridad_final, 1)
 
-
 proveedor_firms = FirmsProvider()
 motor_isr = MotorInteligencia()
 
+# ===> RENOMBRADA PARA EVITAR EL ERROR DE CACHÉ DE STREAMLIT <===
 @st.cache_data(ttl=1800)
-def obtener_focos_firms_seguro():
+def obtener_focos_firms_v2():
     return proveedor_firms.obtener_focos()
 
 def obtener_capa_radar():
@@ -326,7 +325,7 @@ def obtener_datos_completos():
 # ==========================================
 with st.spinner('Sincronizando modelos, base de datos local y red satelital (VIIRS)...'):
     df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos()
-    df_firms, focos_crudos, metodo_filtro = obtener_focos_firms_seguro()
+    df_firms, focos_crudos, metodo_filtro = obtener_focos_firms_v2() # <--- NOMBRE NUEVO
     enlace_radar = obtener_capa_radar()
 
 st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
