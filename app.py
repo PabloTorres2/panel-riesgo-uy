@@ -9,6 +9,7 @@ import plotly.express as px
 import concurrent.futures
 import time
 import random
+from datetime import datetime
 
 # ==========================================
 # 1. CONFIGURACIÓN DEL SISTEMA
@@ -72,32 +73,21 @@ monitoreo_hidrico = {
 }
 
 monitoreo_fuego = {
-    "Artigas": {"lat": -30.40, "lon": -56.46, "coef_a": 0.7}, 
-    "Canelones": {"lat": -34.52, "lon": -55.93, "coef_a": 0.5},
-    "Melo": {"lat": -32.36, "lon": -54.16, "coef_a": 0.7}, 
-    "Colonia": {"lat": -34.46, "lon": -57.83, "coef_a": 0.5},
-    "Durazno": {"lat": -33.38, "lon": -56.52, "coef_a": 0.6}, 
-    "Trinidad": {"lat": -33.51, "lon": -56.89, "coef_a": 0.6},
-    "Florida": {"lat": -34.09, "lon": -56.21, "coef_a": 0.6}, 
-    "Minas": {"lat": -34.37, "lon": -55.23, "coef_a": 0.9},
-    "Maldonado": {"lat": -34.90, "lon": -54.95, "coef_a": 0.4}, 
-    "Piriápolis": {"lat": -34.86, "lon": -55.27, "coef_a": 0.9},
-    "Montevideo": {"lat": -34.90, "lon": -56.16, "coef_a": 0.2}, 
-    "Paysandú": {"lat": -32.31, "lon": -58.07, "coef_a": 0.5},
-    "Fray Bentos": {"lat": -33.13, "lon": -58.29, "coef_a": 0.6}, 
-    "Rivera": {"lat": -30.90, "lon": -55.53, "coef_a": 0.7},
-    "Tranqueras": {"lat": -31.20, "lon": -55.75, "coef_a": 1.0}, 
-    "Rocha": {"lat": -34.48, "lon": -54.33, "coef_a": 0.7},
-    "P. del Diablo": {"lat": -34.04, "lon": -53.54, "coef_a": 1.0}, 
-    "Salto": {"lat": -31.38, "lon": -57.96, "coef_a": 0.5},
-    "San José": {"lat": -34.33, "lon": -56.71, "coef_a": 0.5}, 
-    "Mercedes": {"lat": -33.25, "lon": -58.02, "coef_a": 0.5},
-    "Tacuarembó": {"lat": -31.71, "lon": -55.98, "coef_a": 0.8}, 
-    "Treinta y Tres": {"lat": -33.23, "lon": -54.38, "coef_a": 0.7}
+    "Artigas": {"lat": -30.40, "lon": -56.46, "coef_a": 0.7}, "Canelones": {"lat": -34.52, "lon": -55.93, "coef_a": 0.5},
+    "Melo": {"lat": -32.36, "lon": -54.16, "coef_a": 0.7}, "Colonia": {"lat": -34.46, "lon": -57.83, "coef_a": 0.5},
+    "Durazno": {"lat": -33.38, "lon": -56.52, "coef_a": 0.6}, "Trinidad": {"lat": -33.51, "lon": -56.89, "coef_a": 0.6},
+    "Florida": {"lat": -34.09, "lon": -56.21, "coef_a": 0.6}, "Minas": {"lat": -34.37, "lon": -55.23, "coef_a": 0.9},
+    "Maldonado": {"lat": -34.90, "lon": -54.95, "coef_a": 0.4}, "Piriápolis": {"lat": -34.86, "lon": -55.27, "coef_a": 0.9},
+    "Montevideo": {"lat": -34.90, "lon": -56.16, "coef_a": 0.2}, "Paysandú": {"lat": -32.31, "lon": -58.07, "coef_a": 0.5},
+    "Fray Bentos": {"lat": -33.13, "lon": -58.29, "coef_a": 0.6}, "Rivera": {"lat": -30.90, "lon": -55.53, "coef_a": 0.7},
+    "Tranqueras": {"lat": -31.20, "lon": -55.75, "coef_a": 1.0}, "Rocha": {"lat": -34.48, "lon": -54.33, "coef_a": 0.7},
+    "P. del Diablo": {"lat": -34.04, "lon": -53.54, "coef_a": 1.0}, "Salto": {"lat": -31.38, "lon": -57.96, "coef_a": 0.5},
+    "San José": {"lat": -34.33, "lon": -56.71, "coef_a": 0.5}, "Mercedes": {"lat": -33.25, "lon": -58.02, "coef_a": 0.5},
+    "Tacuarembó": {"lat": -31.71, "lon": -55.98, "coef_a": 0.8}, "Treinta y Tres": {"lat": -33.23, "lon": -54.38, "coef_a": 0.7}
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN METEOROLÓGICA
+# 4. MOTORES DE EXTRACCIÓN Y CÁLCULO
 # ==========================================
 def fetch_hidrico(info):
     try:
@@ -116,9 +106,14 @@ def fetch_hidrico(info):
             raise ValueError
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
-        ll_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3].sum()
+        
+        # Extraemos la telemetría detallada de precipitaciones
+        serie_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3]
+        ll_pasada_total = serie_pasada.sum()
+        ll_ultima_24h = serie_pasada.iloc[-1] # Lluvia específica del último día registrado
         ll_futura = df_c['precipitation_sum'].fillna(0).iloc[-3:].sum()
-        idx = ((ll_pasada * 0.3) + (ll_futura * 0.7)) * info["coef_v"]
+        
+        idx = ((ll_pasada_total * 0.3) + (ll_futura * 0.7)) * info["coef_v"]
         
         if idx < 15: cat = "Normal"
         elif idx <= 35: cat = "Alerta Amarilla"
@@ -130,21 +125,16 @@ def fetch_hidrico(info):
             "Afluente": info["Afluente"], 
             "Latitud": info["lat"], 
             "Longitud": info["lon"], 
-            "Lluvia_14d": round(ll_pasada,1), 
-            "Pronostico_3d": round(ll_futura,1), 
-            "Indice": round(idx,2), 
+            "Lluvia_24h": round(ll_ultima_24h, 1), # Nuevo dato: Lluvia reciente
+            "Lluvia_14d": round(ll_pasada_total, 1), 
+            "Pronostico_3d": round(ll_futura, 1), 
+            "Indice": round(idx, 2), 
             "Categoria": cat
         }
     except:
         return {
-            "Ciudad": info["Ciudad"], 
-            "Afluente": info["Afluente"], 
-            "Latitud": info["lat"], 
-            "Longitud": info["lon"], 
-            "Lluvia_14d": 0, 
-            "Pronostico_3d": 0, 
-            "Indice": 0, 
-            "Categoria": "Sin Datos"
+            "Ciudad": info["Ciudad"], "Afluente": info["Afluente"], "Latitud": info["lat"], "Longitud": info["lon"], 
+            "Lluvia_24h": 0, "Lluvia_14d": 0, "Pronostico_3d": 0, "Indice": 0, "Categoria": "Sin Datos"
         }
 
 def fetch_fuego(ciudad, info):
@@ -185,23 +175,13 @@ def fetch_fuego(ciudad, info):
         else: cat = "Crítico"
         
         return {
-            "Ciudad": ciudad, 
-            "Latitud": info["lat"], 
-            "Longitud": info["lon"], 
-            "PSE": round(PSE,2), 
-            "RFO": round(RFO,4), 
-            "Precip_90d": round(precip_total_90d, 1),
-            "Categoria": cat
+            "Ciudad": ciudad, "Latitud": info["lat"], "Longitud": info["lon"], 
+            "PSE": round(PSE,2), "RFO": round(RFO,4), "Precip_90d": round(precip_total_90d, 1), "Categoria": cat
         }
     except:
         return {
-            "Ciudad": ciudad, 
-            "Latitud": info["lat"], 
-            "Longitud": info["lon"], 
-            "PSE": 0, 
-            "RFO": 0, 
-            "Precip_90d": 0,
-            "Categoria": "Sin Datos"
+            "Ciudad": ciudad, "Latitud": info["lat"], "Longitud": info["lon"], 
+            "PSE": 0, "RFO": 0, "Precip_90d": 0, "Categoria": "Sin Datos"
         }
 
 @st.cache_data(ttl=3600)
@@ -219,14 +199,20 @@ def obtener_datos_completos():
         for f in concurrent.futures.as_completed(f_fuego): 
             r_fuego.append(f.result())
             
-    return pd.DataFrame(r_agua), pd.DataFrame(r_fuego)
+    # Sellamos la hora exacta de la última descarga de satélites
+    hora_actualizacion = datetime.now().strftime("%d/%m/%Y a las %H:%M:%S")
+    return pd.DataFrame(r_agua), pd.DataFrame(r_fuego), hora_actualizacion
 
 
 # ==========================================
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
 with st.spinner('Sincronizando modelos de Open-Meteo...'):
-    df_inundacion, df_fuego = obtener_datos_completos()
+    # Ahora la función nos devuelve 3 cosas (incluyendo la hora)
+    df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos()
+
+# TESTIGO VISUAL DE ACTUALIZACIÓN
+st.info(f"📡 **ENLACE SATELITAL ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
 
 tab_agua, tab_fuego = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD FORESTAL"])
 
@@ -277,10 +263,9 @@ with tab_agua:
         components.html(mapa_indice_agua._repr_html_(), height=450)
         
     with col2:
-        st.markdown("#### Mapa Satelital Infrarrojo (GOES-16)")
+        st.markdown("#### Mapa Meteorológico Satelital")
         mapa_meteo = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         
-        # INYECCIÓN DEL SATÉLITE GOES-16 (IEM WMS)
         folium.WmsTileLayer(
             url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
             layers="goes_conus_ir",
@@ -294,11 +279,25 @@ with tab_agua:
         ).add_to(mapa_meteo)
             
         for idx, fila in df_inundacion.iterrows():
+            # Tooltip interactivo con formato profesional y datos divididos
+            etiqueta_intuitiva = f"""
+            <div style='min-width: 160px; font-family: sans-serif;'>
+                <h4 style='margin-bottom: 5px; color: #1E293B;'>{fila['Ciudad']}</h4>
+                <hr style='margin: 2px 0;'>
+                <span style='color: #2563EB;'>💧 <b>Últimas 24h:</b> {fila['Lluvia_24h']} mm</span><br>
+                <span style='color: #047857;'>🌧️ <b>Acumulado (14d):</b> {fila['Lluvia_14d']} mm</span><br>
+                <span style='color: #D97706;'>🔮 <b>Pronóstico (3d):</b> {fila['Pronostico_3d']} mm</span>
+            </div>
+            """
+            
+            # El tamaño del círculo ahora varía de forma intuitiva según cuánta lluvia acumulada hay
+            radio_dinamico = max(5, min(fila['Lluvia_14d'] / 10, 18))
+            
             folium.CircleMarker(
                 location=[fila['Latitud'], fila['Longitud']], 
-                radius=6,
-                tooltip=f"<b>{fila['Ciudad']}</b><br>Lluvia pasada: {fila['Lluvia_14d']} mm<br>Pronóstico 3d: {fila['Pronostico_3d']} mm",
-                color="#3B82F6", fill=True, fill_opacity=0.5
+                radius=radio_dinamico,
+                tooltip=etiqueta_intuitiva,
+                color="#3B82F6", fill=True, fill_opacity=0.6
             ).add_to(mapa_meteo)
         
         folium.LayerControl().add_to(mapa_meteo)
@@ -336,7 +335,6 @@ with tab_fuego:
         mapa_fuego = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
         colores_fuego = {"Mínimo": "green", "Bajo": "blue", "Medio": "orange", "Alto": "red", "Crítico": "darkred", "Sin Datos": "gray"}
         
-        # INYECCIÓN DEL SATÉLITE GOES-16 (IEM WMS) también en incendios
         folium.WmsTileLayer(
             url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/conus_ir.cgi",
             layers="goes_conus_ir",
