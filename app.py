@@ -91,7 +91,6 @@ monitoreo_fuego = {
     "Tacuarembó": {"lat": -31.71, "lon": -55.98, "coef_a": 0.8}, "Treinta y Tres": {"lat": -33.23, "lon": -54.38, "coef_a": 0.7}
 }
 
-# Unidades FAU Operativas
 unidades_fau = {
     "Brigada Aérea I (Carrasco)": {"lat": -34.833, "lon": -56.033, "vel_kmh": 200},
     "Brigada Aérea II (Durazno)": {"lat": -33.353, "lon": -56.498, "vel_kmh": 200},
@@ -164,7 +163,6 @@ class MotorInteligencia:
         if exposicion == 0: exposicion = 0.1 
         prioridad_final = amenaza * exposicion * 100
         
-        # Devolvemos también amenaza y exposición para trazabilidad analítica
         if prioridad_final > 75: return "ALTA", "red", round(prioridad_final, 1), "Extinción / Evacuación", round(amenaza, 2), round(exposicion, 2)
         elif prioridad_final > 35: return "MODERADA", "orange", round(prioridad_final, 1), "Reconocimiento Táctico", round(amenaza, 2), round(exposicion, 2)
         else: return "BAJA", "green", round(prioridad_final, 1), "Monitoreo Satelital", round(amenaza, 2), round(exposicion, 2)
@@ -385,16 +383,15 @@ with st.spinner('Sincronizando Sistemas C4ISR y Constelaciones Satelitales...'):
 
 st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
 
-# ¡AÑADIDA NUEVA PESTAÑA DOCTRINAL!
 tab_agua, tab_fuego, tab_radar, tab_doctrina = st.tabs(["💧 EVENTOS HÍDRICOS (IHI)", "🌲 INCIDENTES FUEGO (RFO)", "📡 RADAR ESPACIO AÉREO", "📚 CENTRO DE DOCTRINA"])
 
 # --- PESTAÑA 1: INUNDACIONES C4ISR ---
 with tab_agua:
-    # Metodología Oculta para no saturar al Operador
-    with st.expander("ⓘ Metodología Operacional Hídrica"):
-        st.markdown("""
-        **Evaluación Hídrica Integrada:** El sistema calcula un Índice Hídrico Integrado (IHI) utilizando precipitaciones históricas (14d), pronóstico meteorológico (72h), vulnerabilidad de cuenca e infraestructura expuesta. La priorización logística se calcula mediante la matriz: `Prioridad = Amenaza × Exposición`. Agrupación de eventos vía DBSCAN.
-        """)
+    st.info("""
+    **💧 EVENTOS HÍDRICOS (IHI)**
+    - **Modelo:** `IHI = lluvia histórica + pronóstico futuro + vulnerabilidad de cuenca`
+    - **Código principal:** `MotorInteligencia.calcular_prioridad_hidrica()`, `MotorInteligencia.aplicar_dbscan_hidrico()`, `fetch_hidrico()`
+    """)
 
     if "Sin Datos" in df_inundacion["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas cuencas.")
@@ -497,10 +494,11 @@ with tab_agua:
 
 # --- PESTAÑA 2: INCENDIOS + FIRMS + INTELIGENCIA ---
 with tab_fuego:
-    with st.expander("ⓘ Metodología Operacional Fuego"):
-        st.markdown("""
-        **Evaluación de Amenaza Térmica:** Combina el Índice RFO (termodinámica del entorno) con detecciones satelitales VIIRS (NASA). Las detecciones múltiples se agrupan en un solo evento usando el algoritmo de Machine Learning DBSCAN. La Prioridad Operacional es producto directo del cruce espacial entre la Amenaza (Potencia Radiativa FRP + RFO) y la Exposición de Infraestructura Crítica (distancia geométrica en km).
-        """)
+    st.info("""
+    **🌲 INCIDENTES FUEGO (RFO + VIIRS)**
+    - **Modelo:** `RFO + detecciones FIRMS NASA`
+    - **Código principal:** `fetch_fuego()`, `FirmsProvider.obtener_focos()`, `MotorInteligencia.calcular_prioridad_fuego()`
+    """)
 
     if "Sin Datos" in df_fuego["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
@@ -594,6 +592,11 @@ with tab_fuego:
 
 # --- PESTAÑA 3: RADAR ANIMADO ---
 with tab_radar:
+    st.info("""
+    **📡 RADAR ESPACIO AÉREO**
+    - **Fuente:** `RainViewer + Windy`
+    - **Objetivo:** Conciencia situacional meteorológica en tiempo real.
+    """)
     st.markdown("#### Monitor Táctico (Windy)")
     iframe_windy = """
     <iframe width="100%" height="600" src="https://embed.windy.com/embed2.html?lat=-32.5&lon=-56.0&zoom=6&level=surface&overlay=radar&product=radar&menu=&message=&marker=&calendar=now&city=&type=map&location=coordinates&detail=&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1" frameborder="0"></iframe>
@@ -602,9 +605,14 @@ with tab_radar:
 
 # --- PESTAÑA 4: CENTRO DE DOCTRINA ---
 with tab_doctrina:
-    st.header("📚 Centro de Doctrina y Trazabilidad Analítica")
+    st.info("""
+    **📚 DOCTRINA Y TRAZABILIDAD**
+    
+    Esta sección documenta los modelos matemáticos, algoritmos de agrupación espacial y criterios de priorización utilizados por el sistema.
+    """)
+    st.header("Centro de Doctrina y Trazabilidad Analítica")
     st.markdown("""
-    Este documento establece los principios matemáticos y algorítmicos que gobiernan la plataforma ISR de la Fuerza Aérea Uruguaya. El propósito de esta sección es garantizar la **trazabilidad, defendibilidad institucional y rigor científico** detrás de cada alerta generada en el Centro de Operaciones.
+    Este documento establece los principios matemáticos y algorítmicos que gobiernan la plataforma ISR. El propósito de esta sección es garantizar la **trazabilidad, defendibilidad institucional y rigor científico** detrás de cada alerta generada en el Centro de Operaciones.
     
     ---
 
@@ -642,4 +650,19 @@ with tab_doctrina:
     El sistema calcula el tiempo estimado de arribo (ETA) a la zona de impacto iterando sobre las coordenadas de las Brigadas Aéreas. 
     * **Fórmula:** Haversine (Distancia ortodrómica real sobre la curvatura terrestre).
     * **Velocidad de Despliegue:** Modelada sobre una constante de **200 km/h** (Estándar operativo de un helicóptero Bell 212 / UH-1H).
+    
+    ---
+
+    ### 5. Arquitectura de Fusión Multisensor (Multi-Source Intelligence Fusion)
+    El diseño operacional no es un visualizador lineal, sino una arquitectura de convergencia de datos diseñada para aislar el ruido y proyectar inteligencia accionable.
+
+    ```text
+    [Open-Meteo API] ───────┐
+                            ├─> [Modelo IHI] ────────┐
+    [RainViewer API] ───────┘                        │
+                                                     ├─> [Motor ISR] ──> [Priorización] ──> [COP FAU]
+    [NASA FIRMS VIIRS] ─────┐                        │
+                            ├─> [Modelo RFO + DBSCAN]┘
+    [IDE Uruguay / OSM] ────┘
+    ```
     """)
