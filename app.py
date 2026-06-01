@@ -95,8 +95,7 @@ monitoreo_fuego = {
 # ==========================================
 
 def haversine(lat1, lon1, lat2, lon2):
-    """Algoritmo matemático de alta velocidad para distancias terrestres"""
-    R = 6371.0 # Radio de la Tierra en km
+    R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = (math.sin(dlat / 2)**2 +
@@ -105,59 +104,66 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 class FirmsProvider:
-    """Adaptador C4ISR para fuentes de anomalías térmicas (NASA) con tolerancia a fallos"""
     def __init__(self):
         self.url_base = "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_South_America_24h.csv"
         self.cache_file = "firms_24h_cache.csv"
+        self.geo_fallback_url = "https://raw.githubusercontent.com/johan/world.geo.json/master/countries/URY.geo.json"
         
     def clasificar_frp(self, frp):
         try:
             val = float(frp)
             if val < 10: return "BAJO", "orange"
-            elif val < 50: return "MODERADO", "lightred" # Compatible con Folium nativo
+            elif val < 50: return "MODERADO", "lightred"
             elif val < 200: return "ALTO", "red"
             else: return "SEVERO", "darkred"
         except:
             return "DESCONOCIDO", "gray"
 
     def obtener_focos(self):
+        focos_originales = 0
+        tipo_filtro = "Fallido"
+        
         try:
-            # 1. Intentar descarga en vivo y actualizar caché
             df = pd.read_csv(self.url_base)
             df.to_csv(self.cache_file, index=False)
         except Exception:
-            # 2. Resiliencia: Fallback a memoria local si la API falla
             if os.path.exists(self.cache_file):
                 df = pd.read_csv(self.cache_file)
             else:
-                return pd.DataFrame()
+                return pd.DataFrame(), 0, "Sin Datos"
 
-        # 3. Limpieza estricta de variables corruptas (NaN handling)
         df['frp'] = pd.to_numeric(df.get('frp', 0), errors='coerce').fillna(0)
+        
+        # Filtro inicial crudo para reducir carga de memoria antes de Geopandas
+        df_bbox = df[(df['latitude'] >= -36.0) & (df['latitude'] <= -29.0) & 
+                     (df['longitude'] >= -59.0) & (df['longitude'] <= -52.0)].copy()
+        focos_originales = len(df_bbox)
 
-        # 4. Intersección Espacial (GeoPandas si está disponible, BBox como Fallback)
         try:
+            gdf = gpd.GeoDataFrame(df_bbox, geometry=gpd.points_from_xy(df_bbox.longitude, df_bbox.latitude), crs="EPSG:4326")
+            
             if os.path.exists("uruguay.gpkg"):
                 uruguay = gpd.read_file("uruguay.gpkg")
-                gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
-                df_uy = gdf[gdf.within(uruguay.unary_union)].copy()
+                tipo_filtro = "GeoPackage Local (.gpkg)"
             else:
-                df_uy = df[(df['latitude'] >= -35.5) & (df['latitude'] <= -30.0) & 
-                           (df['longitude'] >= -58.5) & (df['longitude'] <= -53.0)].copy()
-        except:
-            df_uy = df[(df['latitude'] >= -35.5) & (df['latitude'] <= -30.0) & 
-                       (df['longitude'] >= -58.5) & (df['longitude'] <= -53.0)].copy()
+                uruguay = gpd.read_file(self.geo_fallback_url)
+                tipo_filtro = "GeoJSON Redundante (API)"
+
+            df_uy = gdf[gdf.within(uruguay.unary_union)].copy()
+            
+        except Exception:
+            df_uy = df_bbox.copy()
+            tipo_filtro = "Bounding Box (Emergencia)"
             
         if not df_uy.empty:
             df_uy[['Nivel_FRP', 'Color_FRP']] = df_uy.apply(
                 lambda row: pd.Series(self.clasificar_frp(row['frp'])), axis=1
             )
-        return df_uy
+            
+        return df_uy, focos_originales, tipo_filtro
 
 class MotorInteligencia:
-    """Motor analítico optimizado de proximidad y ponderación doctrinal"""
     def __init__(self):
-        # Base de datos local transitoria (hasta implementar GeoPackage completo)
         self.infra_critica = {
             "aerodromos": [{"nombre": "Base Aérea", "lat": -34.8, "lon": -56.0}],
             "rutas": [{"nombre": "Ruta Nacional", "lat": -33.0, "lon": -56.0}],
@@ -177,15 +183,12 @@ class MotorInteligencia:
         return reporte
 
     def obtener_rfo_local_dinamico(self, lat, lon, df_rfo_base):
-        """Asigna el RFO por herencia de distancia más corta al foco"""
         if df_rfo_base.empty: return 0.8
         df_calc = df_rfo_base.copy()
-        # Distancia euclidiana rápida al cuadrado
         df_calc["dist_sq"] = (df_calc["Latitud"] - lat)**2 + (df_calc["Longitud"] - lon)**2
         return df_calc.loc[df_calc["dist_sq"].idxmin(), "RFO"]
 
     def calcular_prioridad_operacional(self, frp, rfo, distancias):
-        # Ecuación Base: Amenaza x Exposición
         frp_norm = min(float(frp) / 200.0, 1.0)
         amenaza = (rfo * 0.4) + (frp_norm * 0.6)
         
@@ -203,7 +206,6 @@ class MotorInteligencia:
         else: return "BAJA", "green", round(prioridad_final, 1)
 
 
-# INICIALIZACIÓN DE MOTORES
 proveedor_firms = FirmsProvider()
 motor_isr = MotorInteligencia()
 
@@ -324,7 +326,7 @@ def obtener_datos_completos():
 # ==========================================
 with st.spinner('Sincronizando modelos, base de datos local y red satelital (VIIRS)...'):
     df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos()
-    df_firms = obtener_focos_firms_seguro()
+    df_firms, focos_crudos, metodo_filtro = obtener_focos_firms_seguro()
     enlace_radar = obtener_capa_radar()
 
 st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
@@ -398,6 +400,11 @@ with tab_fuego:
             st.warning(f"⚠️ **ACTIVIDAD DETECTADA:** {focos_totales} focos de calor (Nivel Bajo/Moderado). Mantener vigilancia rutinaria.")
     else:
         st.success("✅ **REPORTE ISR:** Sin detecciones de anomalías térmicas en las últimas 24 horas (Satélite VIIRS).")
+        
+    with st.expander("🔍 Auditoría Espacial FIRMS", expanded=False):
+        st.write(f"**Motor Geométrico:** {metodo_filtro}")
+        st.write(f"**Detecciones Crudas (Caja Sudamérica):** {focos_crudos}")
+        st.write(f"**Focos Depurados (Intersección Uruguay):** {len(df_firms)}")
     
     st.markdown("#### Índice de Vulnerabilidad Forestal Global (RFO)")
     fig_fuego = px.scatter(
@@ -451,9 +458,7 @@ with tab_fuego:
                 lat, lon = foco['latitude'], foco['longitude']
                 frp = foco['frp']
                 
-                # Cálculo de RFO dinámico real heredado por proximidad
                 rfo_local = motor_isr.obtener_rfo_local_dinamico(lat, lon, df_fuego)
-                
                 distancias = motor_isr.buscar_infraestructura_cercana(lat, lon)
                 nivel_prioridad, color_rep, score = motor_isr.calcular_prioridad_operacional(frp, rfo_local, distancias)
                 
