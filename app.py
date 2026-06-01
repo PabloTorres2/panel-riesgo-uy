@@ -9,7 +9,11 @@ import plotly.express as px
 import concurrent.futures
 import time
 import random
+import os
+import math
 from datetime import datetime
+import geopandas as gpd
+from shapely.geometry import Point
 
 # ==========================================
 # 1. CONFIGURACIÓN DEL SISTEMA
@@ -42,7 +46,7 @@ with col_logo:
 
 with col_titulo:
     st.title("Sistema de Vigilancia Territorial")
-    st.markdown("**FUERZA AÉREA URUGUAYA** | Plataforma integrada de evaluación operativa.")
+    st.markdown("**FUERZA AÉREA URUGUAYA** | Plataforma C4ISR de evaluación operativa.")
 
 st.divider()
 
@@ -87,20 +91,30 @@ monitoreo_fuego = {
 }
 
 # ==========================================
-# 4. MOTORES DE EXTRACCIÓN (METEO Y FIRMS)
+# 4. MOTORES GEOESPACIALES E INTELIGENCIA
 # ==========================================
 
+def haversine(lat1, lon1, lat2, lon2):
+    """Algoritmo matemático de alta velocidad para distancias terrestres"""
+    R = 6371.0 # Radio de la Tierra en km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2)**2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
 class FirmsProvider:
-    """Adaptador para fuentes de datos de anomalías térmicas (FIRMS/NASA)"""
+    """Adaptador C4ISR para fuentes de anomalías térmicas (NASA) con tolerancia a fallos"""
     def __init__(self):
         self.url_base = "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_South_America_24h.csv"
+        self.cache_file = "firms_24h_cache.csv"
         
     def clasificar_frp(self, frp):
-        """Categorización operacional de la Potencia Radiativa (MW)"""
         try:
             val = float(frp)
             if val < 10: return "BAJO", "orange"
-            elif val < 50: return "MODERADO", "lightred"
+            elif val < 50: return "MODERADO", "lightred" # Compatible con Folium nativo
             elif val < 200: return "ALTO", "red"
             else: return "SEVERO", "darkred"
         except:
@@ -108,21 +122,90 @@ class FirmsProvider:
 
     def obtener_focos(self):
         try:
+            # 1. Intentar descarga en vivo y actualizar caché
             df = pd.read_csv(self.url_base)
-            # Filtro Táctico: Caja delimitadora del territorio Uruguayo
+            df.to_csv(self.cache_file, index=False)
+        except Exception:
+            # 2. Resiliencia: Fallback a memoria local si la API falla
+            if os.path.exists(self.cache_file):
+                df = pd.read_csv(self.cache_file)
+            else:
+                return pd.DataFrame()
+
+        # 3. Limpieza estricta de variables corruptas (NaN handling)
+        df['frp'] = pd.to_numeric(df.get('frp', 0), errors='coerce').fillna(0)
+
+        # 4. Intersección Espacial (GeoPandas si está disponible, BBox como Fallback)
+        try:
+            if os.path.exists("uruguay.gpkg"):
+                uruguay = gpd.read_file("uruguay.gpkg")
+                gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.longitude, df.latitude), crs="EPSG:4326")
+                df_uy = gdf[gdf.within(uruguay.unary_union)].copy()
+            else:
+                df_uy = df[(df['latitude'] >= -35.5) & (df['latitude'] <= -30.0) & 
+                           (df['longitude'] >= -58.5) & (df['longitude'] <= -53.0)].copy()
+        except:
             df_uy = df[(df['latitude'] >= -35.5) & (df['latitude'] <= -30.0) & 
                        (df['longitude'] >= -58.5) & (df['longitude'] <= -53.0)].copy()
             
-            # Aplicamos la clasificación
+        if not df_uy.empty:
             df_uy[['Nivel_FRP', 'Color_FRP']] = df_uy.apply(
                 lambda row: pd.Series(self.clasificar_frp(row['frp'])), axis=1
             )
-            return df_uy
-        except Exception as e:
-            return pd.DataFrame()
+        return df_uy
 
-# Instanciamos el proveedor
+class MotorInteligencia:
+    """Motor analítico optimizado de proximidad y ponderación doctrinal"""
+    def __init__(self):
+        # Base de datos local transitoria (hasta implementar GeoPackage completo)
+        self.infra_critica = {
+            "aerodromos": [{"nombre": "Base Aérea", "lat": -34.8, "lon": -56.0}],
+            "rutas": [{"nombre": "Ruta Nacional", "lat": -33.0, "lon": -56.0}],
+            "subestaciones": [{"nombre": "Subestación UTE", "lat": -34.0, "lon": -56.2}],
+            "poblados": [{"nombre": "Centro Poblado", "lat": -33.5, "lon": -56.5}]
+        }
+
+    def buscar_infraestructura_cercana(self, lat_foco, lon_foco):
+        reporte = {}
+        for categoria, items in self.infra_critica.items():
+            distancias = []
+            for item in items:
+                dist = haversine(lat_foco, lon_foco, item["lat"], item["lon"])
+                distancias.append((dist, item["nombre"]))
+            distancias.sort(key=lambda x: x[0])
+            reporte[categoria] = distancias[0] if distancias else (999, "N/A")
+        return reporte
+
+    def obtener_rfo_local_dinamico(self, lat, lon, df_rfo_base):
+        """Asigna el RFO por herencia de distancia más corta al foco"""
+        if df_rfo_base.empty: return 0.8
+        df_calc = df_rfo_base.copy()
+        # Distancia euclidiana rápida al cuadrado
+        df_calc["dist_sq"] = (df_calc["Latitud"] - lat)**2 + (df_calc["Longitud"] - lon)**2
+        return df_calc.loc[df_calc["dist_sq"].idxmin(), "RFO"]
+
+    def calcular_prioridad_operacional(self, frp, rfo, distancias):
+        # Ecuación Base: Amenaza x Exposición
+        frp_norm = min(float(frp) / 200.0, 1.0)
+        amenaza = (rfo * 0.4) + (frp_norm * 0.6)
+        
+        exposicion = 0.0
+        if distancias["poblados"][0] < 10: exposicion += 0.5
+        if distancias["subestaciones"][0] < 5: exposicion += 0.3
+        if distancias["rutas"][0] < 2: exposicion += 0.1
+        if distancias["aerodromos"][0] < 15: exposicion += 0.1
+        if exposicion == 0: exposicion = 0.1 
+        
+        prioridad_final = amenaza * exposicion * 100
+        
+        if prioridad_final > 75: return "ALTA", "red", round(prioridad_final, 1)
+        elif prioridad_final > 35: return "MODERADA", "orange", round(prioridad_final, 1)
+        else: return "BAJA", "green", round(prioridad_final, 1)
+
+
+# INICIALIZACIÓN DE MOTORES
 proveedor_firms = FirmsProvider()
+motor_isr = MotorInteligencia()
 
 @st.cache_data(ttl=1800)
 def obtener_focos_firms_seguro():
@@ -145,19 +228,13 @@ def fetch_hidrico(info):
         time.sleep(random.uniform(0.1, 0.7)) 
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "latitude": info["lat"], 
-            "longitude": info["lon"], 
-            "past_days": 14, 
-            "forecast_days": 3, 
-            "daily": ["precipitation_sum"], 
-            "timezone": "America/Montevideo"
+            "latitude": info["lat"], "longitude": info["lon"], "past_days": 14, 
+            "forecast_days": 3, "daily": ["precipitation_sum"], "timezone": "America/Montevideo"
         }
         resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200: 
-            raise ValueError
+        if resp.status_code != 200: raise ValueError
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
-        
         serie_pasada = df_c['precipitation_sum'].fillna(0).iloc[:-3]
         ll_pasada_total = serie_pasada.sum()
         ll_ultima_24h = serie_pasada.iloc[-1] 
@@ -171,15 +248,9 @@ def fetch_hidrico(info):
         else: cat = "Alerta Roja"
         
         return {
-            "Ciudad": info["Ciudad"], 
-            "Afluente": info["Afluente"], 
-            "Latitud": info["lat"], 
-            "Longitud": info["lon"], 
-            "Lluvia_24h": round(ll_ultima_24h, 1), 
-            "Lluvia_14d": round(ll_pasada_total, 1), 
-            "Pronostico_3d": round(ll_futura, 1), 
-            "Indice": round(idx, 2), 
-            "Categoria": cat
+            "Ciudad": info["Ciudad"], "Afluente": info["Afluente"], "Latitud": info["lat"], "Longitud": info["lon"], 
+            "Lluvia_24h": round(ll_ultima_24h, 1), "Lluvia_14d": round(ll_pasada_total, 1), 
+            "Pronostico_3d": round(ll_futura, 1), "Indice": round(idx, 2), "Categoria": cat
         }
     except:
         return {
@@ -192,16 +263,12 @@ def fetch_fuego(ciudad, info):
         time.sleep(random.uniform(0.1, 0.7))
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "latitude": info["lat"], 
-            "longitude": info["lon"], 
-            "past_days": 90, 
-            "forecast_days": 1, 
-            "daily": ["temperature_2m_max", "relative_humidity_2m_min", "precipitation_sum"], 
+            "latitude": info["lat"], "longitude": info["lon"], "past_days": 90, 
+            "forecast_days": 1, "daily": ["temperature_2m_max", "relative_humidity_2m_min", "precipitation_sum"], 
             "timezone": "America/Montevideo"
         }
         resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200: 
-            raise ValueError
+        if resp.status_code != 200: raise ValueError
             
         df_c = pd.DataFrame(resp.json().get("daily", {}))
         df_c = df_c.sort_values(by='time', ascending=False).reset_index(drop=True)
@@ -255,14 +322,14 @@ def obtener_datos_completos():
 # ==========================================
 # 5. PANELES DE CONTROL (FRONT-END)
 # ==========================================
-with st.spinner('Sincronizando constelaciones satelitales (Meteo + VIIRS NASA)...'):
+with st.spinner('Sincronizando modelos, base de datos local y red satelital (VIIRS)...'):
     df_inundacion, df_fuego, ultima_actualizacion = obtener_datos_completos()
     df_firms = obtener_focos_firms_seguro()
     enlace_radar = obtener_capa_radar()
 
 st.info(f"📡 **ENLACE C4ISR ESTABLECIDO:** Última actualización de telemetría el {ultima_actualizacion} (Hora Local).")
 
-tab_agua, tab_fuego, tab_radar = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 VULNERABILIDAD Y FOCOS (FIRMS)", "📡 RADAR ESPACIO AÉREO"])
+tab_agua, tab_fuego, tab_radar = st.tabs(["💧 EVALUACIÓN HÍDRICA", "🌲 FOCOS ISR & PRIORIZACIÓN", "📡 RADAR ESPACIO AÉREO"])
 
 # --- PESTAÑA 1: INUNDACIONES ---
 with tab_agua:
@@ -278,8 +345,7 @@ with tab_agua:
         
         for idx, fila in df_inundacion.iterrows():
             folium.CircleMarker(
-                location=[fila['Latitud'], fila['Longitud']], 
-                radius=10,
+                location=[fila['Latitud'], fila['Longitud']], radius=10,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>Índice: {fila['Indice']}<br>Situación: <b>{fila['Categoria']}</b>",
                 color=colores_agua.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.7
             ).add_to(mapa_indice_agua)
@@ -296,8 +362,7 @@ with tab_agua:
         
         if enlace_radar:
             folium.TileLayer(
-                tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias (Estático)", 
-                overlay=True, control=True, opacity=0.7
+                tiles=enlace_radar, attr="RainViewer", name="Radar Lluvias", overlay=True, control=True, opacity=0.7
             ).add_to(mapa_meteo)
             
         for idx, fila in df_inundacion.iterrows():
@@ -311,22 +376,18 @@ with tab_agua:
             </div>
             """
             radio_dinamico = max(5, min(fila['Lluvia_14d'] / 10, 18))
-            
             folium.CircleMarker(
-                location=[fila['Latitud'], fila['Longitud']], 
-                radius=radio_dinamico,
-                tooltip=etiqueta_intuitiva,
-                color="#3B82F6", fill=True, fill_opacity=0.6
+                location=[fila['Latitud'], fila['Longitud']], radius=radio_dinamico,
+                tooltip=etiqueta_intuitiva, color="#3B82F6", fill=True, fill_opacity=0.6
             ).add_to(mapa_meteo)
         
         components.html(mapa_meteo._repr_html_(), height=450)
 
-# --- PESTAÑA 2: INCENDIOS + FIRMS ---
+# --- PESTAÑA 2: INCENDIOS + FIRMS + INTELIGENCIA ---
 with tab_fuego:
     if "Sin Datos" in df_fuego["Categoria"].values: 
         st.warning("Aviso: Disrupción temporal en algunas localidades.")
         
-    # Testigo de FIRMS con escalada de alertas
     if not df_firms.empty:
         focos_totales = len(df_firms)
         focos_criticos = len(df_firms[df_firms['Nivel_FRP'].isin(['ALTO', 'SEVERO'])])
@@ -338,6 +399,14 @@ with tab_fuego:
     else:
         st.success("✅ **REPORTE ISR:** Sin detecciones de anomalías térmicas en las últimas 24 horas (Satélite VIIRS).")
     
+    st.markdown("#### Índice de Vulnerabilidad Forestal Global (RFO)")
+    fig_fuego = px.scatter(
+        df_fuego, x="PSE", y="RFO", color="Categoria", hover_name="Ciudad",
+        color_discrete_map={"Mínimo": "#10B981", "Bajo": "#3B82F6", "Medio": "#FBBF24", "Alto": "#F97316", "Crítico": "#DC2626", "Sin Datos": "#94A3B8"}, 
+        height=300, template="plotly_white"
+    )
+    st.plotly_chart(fig_fuego, use_container_width=True)
+    
     col3, col4 = st.columns(2)
     
     with col3:
@@ -347,8 +416,7 @@ with tab_fuego:
         
         for idx, fila in df_fuego.iterrows():
             folium.CircleMarker(
-                location=[fila['Latitud'], fila['Longitud']], 
-                radius=10,
+                location=[fila['Latitud'], fila['Longitud']], radius=10,
                 tooltip=f"<b>{fila['Ciudad']}</b><br>RFO: {fila['RFO']}<br>Nivel: <b>{fila['Categoria']}</b>",
                 color=colores_fuego.get(fila['Categoria'], "gray"), fill=True, fill_opacity=0.4
             ).add_to(mapa_fuego)
@@ -361,7 +429,6 @@ with tab_fuego:
                     <hr style='margin: 2px 0;'>
                     <b>Potencia (FRP):</b> {foco['frp']} MW<br>
                     <b>Confianza:</b> {foco.get('confidence', 'N/A')}<br>
-                    <b>Hora (UTC):</b> {foco.get('acq_time', 'N/A')}<br>
                     <b>Lat/Lon:</b> {foco['latitude']:.4f}, {foco['longitude']:.4f}
                 </div>
                 """
@@ -374,22 +441,36 @@ with tab_fuego:
         components.html(mapa_fuego._repr_html_(), height=500)
         
     with col4:
-        st.markdown("#### Mapa de Calor (Estrés Hídrico Previo)")
-        mapa_calor = folium.Map(location=[-32.5, -56.0], zoom_start=6, tiles="CartoDB dark_matter")
+        st.markdown("#### 📡 Reporte ISR Automatizado")
+        st.info("Priorización calculada cruzando amenaza y exposición de infraestructuras críticas.")
         
-        lluvia_maxima = df_fuego['Precip_90d'].max()
-        df_fuego['Peso_Sequia'] = df_fuego['Precip_90d'].apply(lambda x: lluvia_maxima - x + 10)
-        
-        heat_data = [[row['Latitud'], row['Longitud'], row['Peso_Sequia']] for idx, row in df_fuego.iterrows()]
-        
-        HeatMap(
-            heat_data,
-            radius=35,
-            blur=25,
-            gradient={0.2: 'blue', 0.4: 'cyan', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}
-        ).add_to(mapa_calor)
-        
-        components.html(mapa_calor._repr_html_(), height=500)
+        if not df_firms.empty:
+            focos_ordenados = df_firms.sort_values(by='frp', ascending=False).head(5)
+            
+            for idx, foco in focos_ordenados.iterrows():
+                lat, lon = foco['latitude'], foco['longitude']
+                frp = foco['frp']
+                
+                # Cálculo de RFO dinámico real heredado por proximidad
+                rfo_local = motor_isr.obtener_rfo_local_dinamico(lat, lon, df_fuego)
+                
+                distancias = motor_isr.buscar_infraestructura_cercana(lat, lon)
+                nivel_prioridad, color_rep, score = motor_isr.calcular_prioridad_operacional(frp, rfo_local, distancias)
+                
+                st.markdown(f"""
+                <div style="border-left: 4px solid {color_rep}; padding-left: 15px; margin-bottom: 15px; background-color: #F8FAFC; padding-top: 10px; padding-bottom: 10px; border-radius: 4px; border-right: 1px solid #E2E8F0; border-top: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;">
+                    <h5 style="color: #1E293B; margin-bottom: 2px; margin-top: 0;">🔥 OBJETIVO TÁCTICO | Potencia: {frp} MW</h5>
+                    <p style="font-family: monospace; font-size: 13px; color: #475569; margin-top: 5px; margin-bottom: 8px;">
+                        • RFO Local Heredado: <b>{rfo_local:.2f}</b><br>
+                        • Poblado más cercano: <b>{distancias['poblados'][0]:.1f} km</b> ({distancias['poblados'][1]})<br>
+                        • Ruta nacional: <b>{distancias['rutas'][0]:.1f} km</b> ({distancias['rutas'][1]})<br>
+                        • Infra. Eléctrica: <b>{distancias['subestaciones'][0]:.1f} km</b> ({distancias['subestaciones'][1]})
+                    </p>
+                    <h6 style="color: {color_rep}; margin-top: 0px; margin-bottom: 0px;">PRIORIDAD ASIGNADA: {nivel_prioridad} (Score: {score})</h6>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.success("Sin objetivos tácticos activos para derivar a reconocimiento.")
 
 # --- PESTAÑA 3: RADAR ANIMADO ---
 with tab_radar:
